@@ -1,0 +1,124 @@
+"use server";
+
+import { redirect } from "next/navigation";
+
+import { createClient } from "@/lib/supabase/server";
+import { generateContent } from "@/lib/ai";
+import { buildPropertyPrompt } from "@/lib/prompts/content";
+import type { ContentPlatform, ContentTone, ContentType } from "@/types";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+export type GenerateContentState = {
+  error: string | null;
+};
+
+const PLATFORMS: ContentPlatform[] = ["facebook", "zalo", "tiktok"];
+const TONES: ContentTone[] = [
+  "professional",
+  "urgent",
+  "luxury",
+  "family",
+  "investor",
+];
+const CONTENT_TYPES: ContentType[] = [
+  "sales_post",
+  "short_caption",
+  "video_script",
+  "follow_up_message",
+];
+
+// ---------------------------------------------------------------------------
+// generatePropertyContent
+//
+// Called from GenerateForm via useActionState.
+// id is bound server-side (.bind(null, id)) — never read from the form body.
+// ---------------------------------------------------------------------------
+export async function generatePropertyContent(
+  propertyId: string,
+  _prevState: GenerateContentState,
+  formData: FormData
+): Promise<GenerateContentState> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) return { error: "Bạn cần đăng nhập để tạo content." };
+
+  // --- parse & validate options --------------------------------------------
+  const platformRaw = formData.get("platform");
+  const toneRaw = formData.get("tone");
+  const contentTypeRaw = formData.get("content_type");
+
+  const platform = PLATFORMS.includes(platformRaw as ContentPlatform)
+    ? (platformRaw as ContentPlatform)
+    : null;
+  const tone = TONES.includes(toneRaw as ContentTone)
+    ? (toneRaw as ContentTone)
+    : null;
+  const content_type = CONTENT_TYPES.includes(contentTypeRaw as ContentType)
+    ? (contentTypeRaw as ContentType)
+    : null;
+
+  if (!platform) return { error: "Vui lòng chọn nền tảng." };
+  if (!tone) return { error: "Vui lòng chọn giọng văn." };
+  if (!content_type) return { error: "Vui lòng chọn loại content." };
+
+  // --- fetch property (scoped to authenticated user) -----------------------
+  const { data: property, error: propError } = await supabase
+    .from("properties")
+    .select(
+      "id,title,property_type,city,district,ward,street,price,area,bedrooms,bathrooms,house_direction,frontage,alley_width,legal_status,description,strengths,weaknesses,owner_note,planning_note"
+    )
+    .eq("id", propertyId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (propError || !property) {
+    return { error: "Không tìm thấy bất động sản." };
+  }
+
+  // --- build prompt & call AI ---------------------------------------------
+  const prompt = buildPropertyPrompt(property, {
+    platform,
+    tone,
+    contentType: content_type,
+  });
+
+  let generatedText: string;
+  try {
+    const result = await generateContent({ prompt });
+    generatedText = result.text;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Lỗi không xác định.";
+    return { error: `Không thể tạo content: ${message}` };
+  }
+
+  if (!generatedText.trim()) {
+    return { error: "AI không trả về nội dung. Vui lòng thử lại." };
+  }
+
+  // --- persist result ------------------------------------------------------
+  const { data: saved, error: insertError } = await supabase
+    .from("generated_contents")
+    .insert({
+      user_id: user.id,          // always server-set
+      property_id: propertyId,   // always server-set
+      platform,
+      tone,
+      content_type,
+      prompt_used: prompt,
+      content: generatedText,
+    })
+    .select("id")
+    .single();
+
+  if (insertError || !saved?.id) {
+    return { error: insertError?.message ?? "Không thể lưu content." };
+  }
+
+  // --- redirect to output view ---------------------------------------------
+  redirect(`/dashboard/properties/${propertyId}/content/${saved.id}`);
+}
