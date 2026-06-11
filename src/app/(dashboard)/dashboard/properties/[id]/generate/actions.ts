@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { generateContent } from "@/lib/ai";
 import { buildPropertyPrompt } from "@/lib/prompts/content";
+import { trackEvent } from "@/lib/usage";
 import type { ContentPlatform, ContentTone, ContentType } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,13 @@ export async function generatePropertyContent(
   if (insertError || !saved?.id) {
     return { error: insertError?.message ?? "Không thể lưu content." };
   }
+
+  await trackEvent(supabase, user.id, "content_generated", {
+    property_id: propertyId,
+    content_id: saved.id,
+    platform,
+    content_type,
+  });
 
   // --- redirect to output view ---------------------------------------------
   redirect(`/dashboard/properties/${propertyId}/content/${saved.id}`);

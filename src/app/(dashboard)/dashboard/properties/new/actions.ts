@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import { trackEvent } from "@/lib/usage";
 import type { LegalStatus, PropertyType } from "@/types";
 
 export type CreatePropertyState = {
@@ -113,6 +114,10 @@ export async function createProperty(
   if (error || !data?.id) {
     return { error: error?.message ?? "Không thể tạo bất động sản." };
   }
+
+  await trackEvent(supabase, user.id, "property_created", {
+    property_id: data.id,
+  });
 
   redirect(`/dashboard/properties/${data.id}`);
 }

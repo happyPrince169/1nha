@@ -52,8 +52,7 @@ export async function proxy(request: NextRequest) {
 
   const isAuthenticated = !!user;
   const isOnSignIn = pathname.startsWith(SIGN_IN_PATH);
-  const isOnDashboard =
-    pathname.startsWith(DASHBOARD_PATH) || pathname === "/";
+  const isOnDashboard = pathname.startsWith(DASHBOARD_PATH);
 
   // Authenticated → never show sign-in page again
   if (isAuthenticated && isOnSignIn) {

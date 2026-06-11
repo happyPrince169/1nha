@@ -14,10 +14,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "BrokerFlow AI",
-    template: "%s · BrokerFlow AI",
+    default: "1nha — Nhập căn một lần. Có content cả tháng.",
+    template: "%s · 1nha",
   },
-  description: "Mobile-first SaaS MVP for Vietnamese real estate brokers (1nha).",
+  description:
+    "Trợ lý AI giúp môi giới bất động sản lưu nguồn hàng, tạo bài đăng và quản lý content nhanh hơn.",
 };
 
 export default function RootLayout({

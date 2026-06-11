@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { StatCard } from "@/components/stat-card";
+import { OnboardingChecklist } from "@/components/dashboard/onboarding-checklist";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -15,10 +16,35 @@ export default async function DashboardPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // MVP placeholders — wire to real Supabase queries in the next step.
-  const totalProperties = 0;
-  const contentCreated = 0;
-  const quotaRemaining = 0;
+  // --- Real Supabase counts -----------------------------------------------
+  // All queries are scoped to the authenticated user and run in parallel.
+
+  const startOfWeek = new Date();
+  startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+  startOfWeek.setHours(0, 0, 0, 0);
+
+  const [
+    { count: activeProperties },
+    { count: totalContents },
+    { count: contentsThisWeek },
+  ] = await Promise.all([
+    supabase
+      .from("properties")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user?.id ?? "")
+      .neq("status", "archived"),
+
+    supabase
+      .from("generated_contents")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user?.id ?? ""),
+
+    supabase
+      .from("generated_contents")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user?.id ?? "")
+      .gte("created_at", startOfWeek.toISOString()),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -31,14 +57,17 @@ export default async function DashboardPage() {
 
       <section className="grid gap-3">
         <Link
-          href="/dashboard/properties/new"
+          href="/dashboard/properties/quick-add"
           className={cn(buttonVariants({ size: "lg" }), "h-11 w-full")}
         >
-          Thêm căn mới
+          ✨ Nhập nhanh bằng AI
         </Link>
-        <Button variant="outline" className="h-11 w-full" size="lg">
-          Tạo content hôm nay
-        </Button>
+        <Link
+          href="/dashboard/properties/new"
+          className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 w-full")}
+        >
+          Thêm căn thủ công
+        </Link>
         <Link
           href="/dashboard/properties"
           className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-11 w-full")}
@@ -49,11 +78,21 @@ export default async function DashboardPage() {
 
       <Separator />
 
+      {/* Onboarding checklist — visible only when user has no properties yet */}
+      {(activeProperties ?? 0) === 0 && <OnboardingChecklist />}
+
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatCard label="Tổng số căn" value={totalProperties} />
-        <StatCard label="Content đã tạo" value={contentCreated} />
-        <StatCard label="Quota còn lại" value={quotaRemaining} />
+        <StatCard label="Căn đang hoạt động" value={activeProperties ?? 0} />
+        <StatCard label="Content đã tạo" value={totalContents ?? 0} />
+        <StatCard label="Content tuần này" value={contentsThisWeek ?? 0} />
       </section>
+
+      <Link
+        href="/dashboard/content"
+        className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "w-full justify-center text-muted-foreground")}
+      >
+        Xem lịch sử content →
+      </Link>
     </div>
   );
 }

@@ -8,8 +8,35 @@ import { formatVND } from "@/utils";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { ArchiveButton } from "./archive-button";
 import { StatusBadge } from "../status-badge";
+
+// ---------------------------------------------------------------------------
+// Label maps (reused in the content history section below)
+// ---------------------------------------------------------------------------
+const PLATFORM_LABELS: Record<string, string> = {
+  facebook: "Facebook",
+  zalo: "Zalo",
+  tiktok: "TikTok",
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  sales_post: "Bài đăng bán hàng",
+  short_caption: "Caption ngắn",
+  video_script: "Script video",
+  follow_up_message: "Tin nhắn follow-up",
+};
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 60) return `${mins} phút trước`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} giờ trước`;
+  const days = Math.floor(hrs / 24);
+  return `${days} ngày trước`;
+}
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -40,6 +67,15 @@ export default async function PropertyDetailPage({ params }: Props) {
     .single();
 
   if (error || !property) notFound();
+
+  // Fetch the 10 most recent generated contents for this property
+  const { data: contents } = await supabase
+    .from("generated_contents")
+    .select("id, platform, content_type, content, created_at")
+    .eq("property_id", id)
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(10);
 
   return (
     <div className="flex flex-col gap-4">
@@ -110,6 +146,75 @@ export default async function PropertyDetailPage({ params }: Props) {
       <NotesCard title="Điểm yếu" value={property.weaknesses} />
       <NotesCard title="Ghi chú chủ nhà" value={property.owner_note} />
       <NotesCard title="Ghi chú quy hoạch" value={property.planning_note} />
+
+      {/* Content history — always shown for non-archived properties */}
+      {property.status !== "archived" && (
+        <>
+          <Separator />
+
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-semibold">Content đã tạo</h2>
+            {contents && contents.length > 0 && (
+              <span className="text-sm text-muted-foreground">
+                {contents.length} mục
+              </span>
+            )}
+          </div>
+
+          {!contents || contents.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-muted/20 px-5 py-8 text-center">
+              <div
+                className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-2xl"
+                aria-hidden
+              >
+                📝
+              </div>
+              <div className="flex flex-col gap-1">
+                <p className="text-sm font-medium">Chưa có content nào</p>
+                <p className="text-xs text-muted-foreground">
+                  Nhấn “Tạo content AI” phía trên để viết bài đăng đầu tiên cho căn này.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {contents.map((c) => (
+                <Link
+                  key={c.id}
+                  href={`/dashboard/properties/${id}/content/${c.id}`}
+                  className="block"
+                >
+                  <Card size="sm" className="transition-colors hover:bg-muted/40">
+                    <CardHeader className="gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {c.platform && (
+                          <Badge variant="secondary" className="text-xs">
+                            {PLATFORM_LABELS[c.platform] ?? c.platform}
+                          </Badge>
+                        )}
+                        {c.content_type && (
+                          <Badge variant="outline" className="text-xs">
+                            {TYPE_LABELS[c.content_type] ?? c.content_type}
+                          </Badge>
+                        )}
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          {timeAgo(c.created_at)}
+                        </span>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="line-clamp-2 text-sm text-muted-foreground leading-relaxed">
+                        {c.content.slice(0, 100).trimEnd()}
+                        {c.content.length > 100 && "…"}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

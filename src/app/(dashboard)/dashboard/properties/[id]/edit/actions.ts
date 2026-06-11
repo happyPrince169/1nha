@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import { trackEvent } from "@/lib/usage";
 import type { LegalStatus, PropertyType } from "@/types";
 import type { CreatePropertyState } from "../../new/actions";
 
@@ -106,6 +107,8 @@ export async function updateProperty(
     .eq("user_id", user.id);
 
   if (error) return { error: error.message };
+
+  await trackEvent(supabase, user.id, "property_updated", { property_id: id });
 
   redirect(`/dashboard/properties/${id}`);
 }

@@ -42,12 +42,20 @@ export default async function PropertiesPage({ searchParams }: Props) {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Bất động sản</h1>
-        <Link
-          href="/dashboard/properties/new"
-          className={cn(buttonVariants({ size: "sm" }))}
-        >
-          Thêm căn
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            href="/dashboard/properties/quick-add"
+            className={cn(buttonVariants({ size: "sm" }))}
+          >
+            ✨ Nhập nhanh
+          </Link>
+          <Link
+            href="/dashboard/properties/new"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          >
+            Thủ công
+          </Link>
+        </div>
       </div>
 
       <div className="flex gap-2 text-sm">
@@ -82,18 +90,42 @@ export default async function PropertiesPage({ searchParams }: Props) {
       )}
 
       {!error && (!properties || properties.length === 0) && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {showArchived ? "Không có căn nào được lưu trữ" : "Chưa có căn nào"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            {showArchived
-              ? "Các bất động sản được lưu trữ sẽ xuất hiện ở đây."
-              : "Tạo căn đầu tiên để bắt đầu quản lý danh sách."}
-          </CardContent>
-        </Card>
+        showArchived ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Không có căn nào được lưu trữ</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Các bất động sản được lưu trữ sẽ xuất hiện ở đây.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="flex flex-col items-center gap-5 rounded-xl border border-dashed border-border bg-muted/20 px-6 py-10 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted text-3xl" aria-hidden>
+              🏠
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <p className="font-semibold">Chưa có căn nào</p>
+              <p className="text-sm text-muted-foreground">
+                Thêm căn đầu tiên để bắt đầu lưu nguồn hàng và tạo content.
+              </p>
+            </div>
+            <div className="flex w-full flex-col gap-2">
+              <Link
+                href="/dashboard/properties/quick-add"
+                className={cn(buttonVariants(), "w-full")}
+              >
+                ✨ Nhập nhanh bằng AI
+              </Link>
+              <Link
+                href="/dashboard/properties/new"
+                className={cn(buttonVariants({ variant: "outline" }), "w-full")}
+              >
+                Thêm thủ công
+              </Link>
+            </div>
+          </div>
+        )
       )}
 
       <div className="flex flex-col gap-3">
