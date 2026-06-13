@@ -1,18 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
+import { markContentCopied } from "./actions";
 
-export function CopyButton({ text }: { text: string }) {
+type Props = {
+  text: string;
+  contentId: string;
+};
+
+export function CopyButton({ text, contentId }: Props) {
   const [copied, setCopied] = useState(false);
+  const [, startTransition] = useTransition();
 
   async function handleCopy() {
+    // Clipboard write
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for older browsers / HTTP (non-HTTPS) contexts
+      // Fallback for older browsers / HTTP contexts
       const el = document.createElement("textarea");
       el.value = text;
       el.style.position = "fixed";
@@ -21,9 +27,15 @@ export function CopyButton({ text }: { text: string }) {
       el.select();
       document.execCommand("copy");
       document.body.removeChild(el);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     }
+
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+
+    // Fire-and-forget server action to record copied_at
+    startTransition(async () => {
+      await markContentCopied(contentId);
+    });
   }
 
   return (

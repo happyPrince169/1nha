@@ -34,6 +34,8 @@ export type ContentType =
   | "video_script"
   | "follow_up_message";
 
+export type ContentStatus = "draft" | "scheduled" | "posted" | "archived";
+
 // --- User / Auth -----------------------------------------------------------
 
 export interface UserProfile {
@@ -103,6 +105,17 @@ export interface GeneratedContent {
   prompt_version: string | null; // DB default 'v1', reserved for future use
   content: string;              // renamed from output_text via migration
   created_at: string;
+
+  // Content Workspace v1 fields
+  title: string | null;
+  status: ContentStatus;        // default 'draft'
+  copied_at: string | null;
+  scheduled_at: string | null;
+  posted_at: string | null;
+  post_url: string | null;
+  channel_name: string | null;
+  notes: string | null;
+  parent_content_id: string | null;
 }
 
 // --- Dashboard stats (computed client-side / via RPC) ---------------------

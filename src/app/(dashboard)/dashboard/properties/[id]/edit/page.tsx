@@ -12,9 +12,8 @@ type Props = {
   params: Promise<{ id: string }>;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const { id } = await params;
-  return { title: `Chỉnh sửa bất động sản` };
+export async function generateMetadata(): Promise<Metadata> {
+  return { title: "Chỉnh sửa bất động sản" };
 }
 
 export default async function EditPropertyPage({ params }: Props) {

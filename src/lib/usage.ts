@@ -16,7 +16,10 @@ export type UsageEventType =
   | "property_updated"
   | "quick_add_text"
   | "quick_add_image"
-  | "content_generated";
+  | "content_generated"
+  | "content_copied"
+  | "content_marked_posted"
+  | "content_archived";
 
 /**
  * Insert a usage event row. Never throws — errors are silently swallowed so

@@ -2,14 +2,10 @@
 
 import { useActionState } from "react";
 
-import {
-  generatePropertyContent,
-  type GenerateContentState,
-} from "./actions";
+import { type GenerateContentState } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormError } from "@/components/ui/form-error";
-import { Label } from "@/components/ui/label";
 
 // ---------------------------------------------------------------------------
 // Option configs — labels co-located with the form so they stay in sync

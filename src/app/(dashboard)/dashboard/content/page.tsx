@@ -7,12 +7,16 @@ import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ContentFilters, PLATFORM_LABELS, TYPE_LABELS } from "./content-filters";
+import { ContentStatusBadge } from "../properties/[id]/content/content-status-badge";
+import type { ContentStatus } from "@/types";
 
 export const metadata: Metadata = { title: "Lịch sử content" };
 
 type Props = {
-  searchParams: Promise<{ platform?: string; q?: string }>;
+  searchParams: Promise<{ platform?: string; status?: string; q?: string }>;
 };
+
+const VALID_STATUSES = new Set(["draft", "scheduled", "posted", "archived"]);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,11 +44,13 @@ function platformBadgeClass(platform: string): string {
   }
 }
 
+const VALID_PLATFORMS = new Set(["facebook", "zalo", "tiktok"]);
+
 // ---------------------------------------------------------------------------
 // Page (Server Component)
 // ---------------------------------------------------------------------------
 export default async function ContentHistoryPage({ searchParams }: Props) {
-  const { platform, q } = await searchParams;
+  const { platform, status, q } = await searchParams;
 
   const supabase = await createClient();
   const {
@@ -53,32 +59,39 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
 
   if (!user) return null;
 
-  // Build query — join to properties so we can show the title and filter by it
+  // Build query — join to properties so we can show the title
   let query = supabase
     .from("generated_contents")
     .select(
-      "id, platform, content_type, content, created_at, property_id, properties(id, title)"
+      "id, platform, content_type, content, status, created_at, copied_at, property_id, properties(id, title)"
     )
     .eq("user_id", user.id)
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(200);
 
-  if (platform && ["facebook", "zalo", "tiktok"].includes(platform)) {
+  // Server-side platform filter
+  if (platform && VALID_PLATFORMS.has(platform)) {
     query = query.eq("platform", platform);
+  }
+
+  // Server-side status filter
+  if (status && VALID_STATUSES.has(status)) {
+    query = query.eq("status", status);
   }
 
   const { data: contents, error } = await query;
 
-  // Client-side title search (Supabase free tier doesn't support ilike on
-  // joined columns in all versions; filtering in JS keeps the query simple).
-  const filtered =
-    q && q.trim()
-      ? (contents ?? []).filter((c) => {
-          const title =
-            (c.properties as { title?: string } | null)?.title ?? "";
-          return title.toLowerCase().includes(q.trim().toLowerCase());
-        })
-      : (contents ?? []);
+  // Client-side search: match against property title OR content text.
+  // Kept in JS to avoid PostgREST ilike-on-join limitations.
+  const trimQ = q?.trim().toLowerCase() ?? "";
+  const filtered = trimQ
+    ? (contents ?? []).filter((c) => {
+        const title =
+          (c.properties as { title?: string } | null)?.title?.toLowerCase() ?? "";
+        const body = c.content.toLowerCase();
+        return title.includes(trimQ) || body.includes(trimQ);
+      })
+    : (contents ?? []);
 
   return (
     <div className="flex flex-col gap-4">
@@ -151,6 +164,7 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
             "—";
           const preview = c.content.slice(0, 120).trimEnd();
           const hasMore = c.content.length > 120;
+          const contentStatus = (c.status ?? "draft") as ContentStatus;
 
           return (
             <Link
@@ -160,7 +174,7 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
             >
               <Card className="transition-colors hover:bg-muted/40">
                 <CardHeader className="gap-2">
-                  {/* Platform + type badges */}
+                  {/* Platform + type + status */}
                   <div className="flex flex-wrap items-center gap-1.5">
                     {c.platform && (
                       <span
@@ -177,6 +191,10 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
                         {TYPE_LABELS[c.content_type] ?? c.content_type}
                       </Badge>
                     )}
+                    <ContentStatusBadge
+                      status={contentStatus}
+                      className="ml-auto"
+                    />
                   </div>
 
                   {/* Property title */}
@@ -192,10 +210,15 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
                     {hasMore && "…"}
                   </p>
 
-                  {/* Timestamp */}
-                  <p className="text-xs text-muted-foreground">
-                    {timeAgo(c.created_at)}
-                  </p>
+                  {/* Meta row */}
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span>{timeAgo(c.created_at)}</span>
+                    {c.copied_at && (
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        ✓ Sao chép
+                      </span>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             </Link>

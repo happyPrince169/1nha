@@ -26,6 +26,53 @@ const PLATFORM_FILTERS = [
   { value: "tiktok", label: "TikTok" },
 ] as const;
 
+const STATUS_FILTERS = [
+  { value: "", label: "Mọi trạng thái" },
+  { value: "draft", label: "Bản nháp" },
+  { value: "posted", label: "Đã đăng" },
+  { value: "archived", label: "Lưu trữ" },
+] as const;
+
+// ---------------------------------------------------------------------------
+// PillGroup — reusable pill filter row
+// ---------------------------------------------------------------------------
+function PillGroup({
+  filters,
+  current,
+  onSelect,
+  ariaLabel,
+}: {
+  filters: readonly { value: string; label: string }[];
+  current: string;
+  onSelect: (v: string) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div role="group" aria-label={ariaLabel} className="flex flex-wrap gap-2">
+      {filters.map((f) => {
+        const active = f.value === current;
+        return (
+          <button
+            key={f.value}
+            type="button"
+            onClick={() => onSelect(f.value)}
+            aria-pressed={active}
+            className={[
+              "rounded-full border px-3 py-1 text-sm font-medium transition-colors outline-none",
+              "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+              active
+                ? "border-foreground bg-foreground text-background"
+                : "border-border bg-background text-muted-foreground hover:text-foreground",
+            ].join(" ")}
+          >
+            {f.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ContentFilters
 // ---------------------------------------------------------------------------
@@ -36,6 +83,7 @@ export function ContentFilters() {
   const [isPending, startTransition] = useTransition();
 
   const currentPlatform = searchParams.get("platform") ?? "";
+  const currentStatus = searchParams.get("status") ?? "";
   const currentQ = searchParams.get("q") ?? "";
 
   function navigate(nextParams: Record<string, string>) {
@@ -58,40 +106,42 @@ export function ContentFilters() {
       <input
         type="search"
         defaultValue={currentQ}
-        placeholder="Tìm theo tiêu đề bất động sản…"
-        onChange={(e) => navigate({ q: e.target.value, platform: currentPlatform })}
+        placeholder="Tìm theo bất động sản hoặc nội dung…"
+        onChange={(e) =>
+          navigate({
+            q: e.target.value,
+            platform: currentPlatform,
+            status: currentStatus,
+          })
+        }
         className={[
           "h-11 w-full rounded-lg border border-input bg-background px-3 text-sm",
           "placeholder:text-muted-foreground outline-none",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           "transition-colors",
         ].join(" ")}
-        aria-label="Tìm kiếm theo tiêu đề bất động sản"
+        aria-label="Tìm kiếm"
+      />
+
+      {/* Status pills */}
+      <PillGroup
+        filters={STATUS_FILTERS}
+        current={currentStatus}
+        ariaLabel="Lọc theo trạng thái"
+        onSelect={(v) =>
+          navigate({ status: v, platform: currentPlatform, q: currentQ })
+        }
       />
 
       {/* Platform pills */}
-      <div role="group" aria-label="Lọc theo nền tảng" className="flex flex-wrap gap-2">
-        {PLATFORM_FILTERS.map((f) => {
-          const active = f.value === currentPlatform;
-          return (
-            <button
-              key={f.value}
-              type="button"
-              onClick={() => navigate({ platform: f.value, q: currentQ })}
-              aria-pressed={active}
-              className={[
-                "rounded-full border px-3 py-1 text-sm font-medium transition-colors outline-none",
-                "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-                active
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-background text-muted-foreground hover:text-foreground",
-              ].join(" ")}
-            >
-              {f.label}
-            </button>
-          );
-        })}
-      </div>
+      <PillGroup
+        filters={PLATFORM_FILTERS}
+        current={currentPlatform}
+        ariaLabel="Lọc theo nền tảng"
+        onSelect={(v) =>
+          navigate({ platform: v, status: currentStatus, q: currentQ })
+        }
+      />
     </div>
   );
 }

@@ -154,11 +154,12 @@ export default async function PropertyDetailPage({ params }: Props) {
 
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-semibold">Content đã tạo</h2>
-            {contents && contents.length > 0 && (
-              <span className="text-sm text-muted-foreground">
-                {contents.length} mục
-              </span>
-            )}
+            <Link
+              href={`/dashboard/properties/${id}/content`}
+              className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-muted-foreground")}
+            >
+              Xem tất cả →
+            </Link>
           </div>
 
           {!contents || contents.length === 0 ? (
