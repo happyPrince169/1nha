@@ -40,6 +40,9 @@ async function fetchOwnedContent(
 function revalidateContentPaths(propertyId: string, contentId: string) {
   revalidatePath(`/dashboard/properties/${propertyId}/content`);
   revalidatePath(`/dashboard/properties/${propertyId}/content/${contentId}`);
+  revalidatePath(
+    `/dashboard/properties/${propertyId}/content/${contentId}/post`
+  );
   revalidatePath(`/dashboard/properties/${propertyId}`);
   revalidatePath("/dashboard/content");
 }

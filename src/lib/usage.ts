@@ -23,7 +23,10 @@ export type UsageEventType =
   | "property_image_uploaded"
   | "property_image_deleted"
   | "property_cover_updated"
-  | "content_edited";
+  | "content_edited"
+  | "post_assistant_opened"
+  | "post_assistant_text_copied"
+  | "post_assistant_marked_posted";
 
 /**
  * Insert a usage event row. Never throws — errors are silently swallowed so

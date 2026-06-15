@@ -219,6 +219,20 @@ export default async function ContentOutputPage({ params }: Props) {
         <CopyButton text={content.content} contentId={contentId} />
       )}
 
+      {/* Post assistant CTA */}
+      {!isArchived && (
+        <Link
+          href={`/dashboard/properties/${id}/content/${contentId}/post`}
+          className={cn(
+            buttonVariants({ variant: "outline" }),
+            "h-11 w-full justify-center gap-2"
+          )}
+        >
+          <span aria-hidden>📣</span>
+          Trợ lý đăng bài
+        </Link>
+      )}
+
       {/* Mark as posted form */}
       {!isArchived && (
         <MarkPostedForm
