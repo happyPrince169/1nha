@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { contactOptions, contactOptionOrder } from "@/lib/contact";
 import type { BrokerProfile } from "@/types";
 import { AccountForm } from "./account-form";
 import { SignOutButton } from "@/components/sign-out-button";
@@ -42,6 +43,43 @@ function AccountLinkCard({
       </div>
       <span className="ml-auto text-muted-foreground/50 shrink-0" aria-hidden>›</span>
     </Link>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Contact channel row (external <a>, not a Next route)
+// ---------------------------------------------------------------------------
+function ContactRow({
+  icon,
+  label,
+  description,
+  href,
+  external,
+}: {
+  icon: string;
+  label: string;
+  description: string;
+  href: string;
+  external: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+      className={cn(
+        "flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3",
+        "transition-colors hover:bg-muted/40"
+      )}
+    >
+      <span className="text-xl shrink-0" aria-hidden>{icon}</span>
+      <div className="flex flex-col gap-0.5 min-w-0">
+        <span className="text-sm font-medium leading-tight">{label}</span>
+        <span className="text-xs text-muted-foreground leading-tight truncate">
+          {description}
+        </span>
+      </div>
+      <span className="ml-auto text-muted-foreground/50 shrink-0" aria-hidden>›</span>
+    </a>
   );
 }
 
@@ -96,6 +134,33 @@ export default async function AccountPage() {
 
       <Separator />
 
+      {/* Liên hệ & góp ý */}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-0.5 px-1">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Liên hệ &amp; góp ý
+          </p>
+          <p className="text-xs text-muted-foreground leading-snug">
+            Cần hỗ trợ hoặc muốn góp ý cho 1nha? Chọn kênh liên hệ phù hợp.
+          </p>
+        </div>
+        {contactOptionOrder.map((key) => {
+          const option = contactOptions[key];
+          return (
+            <ContactRow
+              key={key}
+              icon={option.icon}
+              label={option.label}
+              description={option.description}
+              href={option.href}
+              external={option.external}
+            />
+          );
+        })}
+      </div>
+
+      <Separator />
+
       {/* Account & billing links */}
       <div className="flex flex-col gap-2">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide px-1">
@@ -119,31 +184,6 @@ export default async function AccountPage() {
           description="Để lại nhu cầu, 1nha thông báo khi mở gói"
           href="/dashboard/billing/upgrade"
         />
-      </div>
-
-      <Separator />
-
-      {/* Support */}
-      <div className="flex flex-col gap-2">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide px-1">
-          Hỗ trợ
-        </p>
-        <a
-          href="mailto:feedback@1nha.app"
-          className={cn(
-            "flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3",
-            "transition-colors hover:bg-muted/40"
-          )}
-        >
-          <span className="text-xl shrink-0" aria-hidden>💬</span>
-          <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium leading-tight">Góp ý & phản hồi</span>
-            <span className="text-xs text-muted-foreground leading-tight">
-              feedback@1nha.app
-            </span>
-          </div>
-          <span className="ml-auto text-muted-foreground/50 shrink-0" aria-hidden>›</span>
-        </a>
       </div>
 
       <Separator />
