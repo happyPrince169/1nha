@@ -1,87 +1,108 @@
 // ---------------------------------------------------------------------------
 // Central navigation config for 1nha dashboard
 //
-// Single source of truth for nav labels, hrefs, icons, and descriptions.
-// Used by BottomNav and any future sidebar/drawer implementations.
+// Single source of truth for the five bottom-nav tabs, active-state
+// resolution, and secondary account/settings links.
 // ---------------------------------------------------------------------------
+import type { LucideIcon } from "lucide-react";
+import { Home, Building2, Zap, FileText, User } from "lucide-react";
 
-export type NavItem = {
+// ---------------------------------------------------------------------------
+// Bottom nav item type
+// ---------------------------------------------------------------------------
+export type BottomNavItem = {
+  /** Vietnamese display label */
   label: string;
+  /** Route this tab navigates to */
   href: string;
-  /** Emoji used as the icon in the bottom nav */
-  icon: string;
-  /** Short description shown in tooltips or future onboarding hints */
-  shortDescription: string;
+  /** Lucide icon component */
+  icon: LucideIcon;
   /**
-   * Pathname prefix used to determine the active state.
-   * A nav item is active when the current pathname starts with this prefix,
-   * UNLESS the current pathname also matches a more specific item's prefix.
-   * The array is ordered from most to least specific so the first match wins.
+   * Whether this tab is the primary centre action.
+   * Gets an accent circle/pill treatment in the nav.
    */
-  activePrefix: string;
+  isPrimary?: boolean;
+  /**
+   * All pathname prefixes that activate this tab.
+   * Evaluated longest-first so more specific routes always win.
+   */
+  activePrefixes: readonly string[];
 };
 
-export const NAV_ITEMS: readonly NavItem[] = [
+// ---------------------------------------------------------------------------
+// The five bottom nav tabs — exactly five, ordered left → right
+// ---------------------------------------------------------------------------
+export const dashboardBottomNavItems: readonly BottomNavItem[] = [
   {
     label: "Tổng quan",
     href: "/dashboard",
-    icon: "🏡",
-    shortDescription: "Xem tóm tắt và truy cập nhanh",
-    // Exact match only — all other dashboard routes are more specific
-    activePrefix: "/dashboard",
+    icon: Home,
+    // /dashboard exact only — every other dashboard route is more specific
+    activePrefixes: ["/dashboard"],
   },
   {
     label: "Kho nguồn",
     href: "/dashboard/properties",
-    icon: "🗂️",
-    shortDescription: "Quản lý toàn bộ căn đang bán",
-    activePrefix: "/dashboard/properties",
+    icon: Building2,
+    // All /dashboard/properties/** except quick-add
+    activePrefixes: ["/dashboard/properties"],
   },
   {
     label: "Nhập nhanh",
     href: "/dashboard/properties/quick-add",
-    icon: "✨",
-    shortDescription: "Nhập nguồn hàng mới bằng AI",
-    activePrefix: "/dashboard/properties/quick-add",
+    icon: Zap,
+    isPrimary: true,
+    activePrefixes: ["/dashboard/properties/quick-add"],
   },
   {
     label: "Nội dung",
     href: "/dashboard/content",
-    icon: "📝",
-    shortDescription: "Quản lý content đã tạo và đã đăng",
-    activePrefix: "/dashboard/content",
+    icon: FileText,
+    // Văn phong lives inside Nội dung, not its own tab
+    activePrefixes: ["/dashboard/content", "/dashboard/style-profiles"],
   },
   {
-    label: "Văn phong",
-    href: "/dashboard/style-profiles",
-    icon: "✍️",
-    shortDescription: "Lưu phong cách viết riêng của bạn",
-    activePrefix: "/dashboard/style-profiles",
+    label: "Tài khoản",
+    href: "/dashboard/account",
+    icon: User,
+    // Gói sử dụng lives inside Tài khoản, not its own tab
+    activePrefixes: ["/dashboard/account", "/dashboard/billing"],
   },
 ] as const;
 
-/**
- * Determine the active nav item for a given pathname.
- *
- * Rules (applied in order of specificity, most specific first):
- * 1. /dashboard/properties/quick-add  → "Nhập nhanh"
- * 2. /dashboard/properties/…          → "Kho nguồn"
- * 3. /dashboard/content/…             → "Nội dung"
- * 4. /dashboard/style-profiles/…      → "Văn phong"
- * 5. /dashboard (exact)               → "Tổng quan"
- *
- * We sort items by prefix length descending so longer (more specific) prefixes
- * are tested first — avoiding /dashboard matching before /dashboard/properties.
- */
-export function getActiveNavHref(pathname: string): string {
-  const sorted = [...NAV_ITEMS].sort(
-    (a, b) => b.activePrefix.length - a.activePrefix.length
-  );
-  for (const item of sorted) {
-    if (pathname === item.activePrefix || pathname.startsWith(item.activePrefix + "/")) {
-      return item.href;
+// ---------------------------------------------------------------------------
+// Active-state resolver
+//
+// Returns the href of the tab that should be highlighted for a given pathname.
+// Pairs are sorted by prefix length descending — longest (most specific) wins.
+// /dashboard is exact-match only so it never beats /dashboard/properties etc.
+// ---------------------------------------------------------------------------
+export function getActiveTabHref(pathname: string): string {
+  type Pair = { prefix: string; tabHref: string };
+  const pairs: Pair[] = [];
+
+  for (const item of dashboardBottomNavItems) {
+    for (const prefix of item.activePrefixes) {
+      pairs.push({ prefix, tabHref: item.href });
     }
   }
-  // Fallback: "Tổng quan" is always a reasonable active state
+  pairs.sort((a, b) => b.prefix.length - a.prefix.length);
+
+  for (const { prefix, tabHref } of pairs) {
+    if (prefix === "/dashboard") {
+      if (pathname === "/dashboard") return tabHref;
+    } else if (pathname === prefix || pathname.startsWith(prefix + "/")) {
+      return tabHref;
+    }
+  }
   return "/dashboard";
 }
+
+// ---------------------------------------------------------------------------
+// Legacy aliases — keeps existing import sites compiling without changes
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use dashboardBottomNavItems */
+export const NAV_ITEMS = dashboardBottomNavItems;
+/** @deprecated Use getActiveTabHref */
+export const getActiveNavHref = getActiveTabHref;

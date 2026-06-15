@@ -96,16 +96,44 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
   return (
     <div className="flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-0.5">
-          <h1 className="text-xl font-semibold tracking-tight">Nội dung</h1>
-          <p className="text-sm text-muted-foreground leading-snug">
-            Quản lý các bài đã tạo, đã chỉnh sửa, đã copy và đã đăng.
-            {filtered.length > 0 && (
-              <span className="ml-1 text-muted-foreground/70">({filtered.length} mục)</span>
-            )}
-          </p>
-        </div>
+      <div className="flex flex-col gap-0.5">
+        <h1 className="text-xl font-semibold tracking-tight">Nội dung</h1>
+        <p className="text-sm text-muted-foreground leading-snug">
+          Quản lý bài đã tạo, đã chỉnh sửa, văn phong riêng và lịch sử đã đăng.
+          {filtered.length > 0 && (
+            <span className="ml-1 text-muted-foreground/70">({filtered.length} mục)</span>
+          )}
+        </p>
+      </div>
+
+      {/* Quick-action cards */}
+      <div className="grid grid-cols-2 gap-2">
+        <Link
+          href="/dashboard/content"
+          className={cn(
+            "flex flex-col gap-1.5 rounded-xl border border-border bg-card p-3",
+            "transition-colors hover:bg-muted/40"
+          )}
+        >
+          <span className="text-lg" aria-hidden>Nội dung đã tạo</span>
+          <span className="text-xs font-medium leading-snug">Nội dung đã tạo</span>
+          <span className="text-[11px] text-muted-foreground leading-snug">
+            Bài đã viết, đã copy, đã đăng
+          </span>
+        </Link>
+        <Link
+          href="/dashboard/style-profiles"
+          className={cn(
+            "flex flex-col gap-1.5 rounded-xl border border-border bg-card p-3",
+            "transition-colors hover:bg-muted/40"
+          )}
+        >
+          <span className="text-lg" aria-hidden>✍️</span>
+          <span className="text-xs font-medium leading-snug">Văn phong của tôi</span>
+          <span className="text-[11px] text-muted-foreground leading-snug">
+            Phong cách viết riêng
+          </span>
+        </Link>
       </div>
 
       {/* Filters */}

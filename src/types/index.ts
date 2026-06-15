@@ -38,6 +38,7 @@ export type ContentStatus = "draft" | "scheduled" | "posted" | "archived";
 
 // --- User / Auth -----------------------------------------------------------
 
+/** Legacy shape used internally for auth-user display. */
 export interface UserProfile {
   id: string;
   email: string;
@@ -47,6 +48,38 @@ export interface UserProfile {
   quota_limit: number;       // monthly AI content quota
   quota_used: number;        // consumed this month
   created_at: string;
+}
+
+export type BrokerRole =
+  | "independent_broker"
+  | "team_lead"
+  | "agency"
+  | "other";
+
+/** Row in public.user_profiles — broker display / contact info. */
+export interface BrokerProfile {
+  user_id: string;              // PK + FK → auth.users.id
+  display_name: string | null;
+  phone: string | null;
+  company_name: string | null;
+  role: BrokerRole | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export type UpgradeInterestPlan = "pro_personal" | "team" | "unsure";
+export type UpgradeInterestStatus = "pending" | "contacted" | "cancelled";
+
+/** Row in public.upgrade_interest_requests. */
+export interface UpgradeInterestRequest {
+  id: string;
+  user_id: string;              // FK → auth.users.id
+  interested_plan: UpgradeInterestPlan;
+  phone: string | null;
+  note: string | null;
+  status: UpgradeInterestStatus;
+  created_at: string;
+  updated_at: string | null;
 }
 
 // --- Property (Căn hộ / Bất động sản) -------------------------------------

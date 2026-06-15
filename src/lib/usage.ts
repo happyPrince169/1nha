@@ -30,7 +30,10 @@ export type UsageEventType =
   | "style_profile_created"
   | "style_profile_updated"
   | "style_profile_deleted"
-  | "style_profile_used";
+  | "style_profile_used"
+  | "account_profile_updated"
+  | "billing_viewed"
+  | "upgrade_interest_submitted";
 
 /**
  * Insert a usage event row. Never throws — errors are silently swallowed so

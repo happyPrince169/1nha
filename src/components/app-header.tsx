@@ -4,12 +4,14 @@ import { cn } from "@/lib/utils";
 
 type AppHeaderProps = {
   title: string;
+  /** Optional one-line subtitle shown below the title */
+  subtitle?: string;
   showBeta?: boolean;
   rightSlot?: React.ReactNode;
   className?: string;
 };
 
-export function AppHeader({ title, showBeta, rightSlot, className }: AppHeaderProps) {
+export function AppHeader({ title, subtitle, showBeta, rightSlot, className }: AppHeaderProps) {
   return (
     <header
       className={cn(
@@ -18,10 +20,17 @@ export function AppHeader({ title, showBeta, rightSlot, className }: AppHeaderPr
         className
       )}
     >
-      <div className="mx-auto flex w-full max-w-md items-center justify-between px-4 py-3">
+      <div className="mx-auto flex w-full max-w-md items-center justify-between px-4 py-2.5">
         <div className="flex items-center gap-2">
-          <Link href="/dashboard" className="font-heading text-base font-semibold">
-            {title}
+          <Link href="/dashboard" className="flex flex-col gap-0">
+            <span className="font-heading text-base font-semibold leading-tight">
+              {title}
+            </span>
+            {subtitle && (
+              <span className="text-[10px] text-muted-foreground leading-tight">
+                {subtitle}
+              </span>
+            )}
           </Link>
           {showBeta && (
             <span
@@ -32,7 +41,9 @@ export function AppHeader({ title, showBeta, rightSlot, className }: AppHeaderPr
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">{rightSlot}</div>
+        {rightSlot && (
+          <div className="flex items-center gap-2">{rightSlot}</div>
+        )}
       </div>
     </header>
   );
