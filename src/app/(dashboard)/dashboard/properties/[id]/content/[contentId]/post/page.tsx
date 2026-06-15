@@ -161,22 +161,30 @@ export default async function PostAssistantPage({ params }: Props) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* ── A. Header ──────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-3">
+      {/* ── A. Header ─────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-0.5">
           <h1 className="text-xl font-semibold tracking-tight">
             Trợ lý đăng bài
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Chuẩn bị nội dung và ảnh để đăng lên mạng xã hội.
+          <p className="text-sm text-muted-foreground leading-snug">
+            Chuẩn bị nội dung và ảnh để đăng lên Facebook, Zalo, TikTok.
           </p>
         </div>
         <Link
           href={`/dashboard/properties/${id}/content/${contentId}`}
-          className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          className={cn(buttonVariants({ variant: "outline", size: "sm" }), "shrink-0")}
         >
           ← Quay lại
         </Link>
+      </div>
+
+      {/* No-auto-post disclaimer */}
+      <div className="flex items-start gap-2.5 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+        <span aria-hidden className="mt-px shrink-0 text-sm">ℹ️</span>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          1nha chưa tự đăng thay bạn. Bạn copy nội dung, tải ảnh rồi đăng thủ công trên nền tảng bạn chọn.
+        </p>
       </div>
 
       {/* ── B. Property summary ────────────────────────────────────── */}

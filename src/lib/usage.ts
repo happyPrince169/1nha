@@ -26,7 +26,11 @@ export type UsageEventType =
   | "content_edited"
   | "post_assistant_opened"
   | "post_assistant_text_copied"
-  | "post_assistant_marked_posted";
+  | "post_assistant_marked_posted"
+  | "style_profile_created"
+  | "style_profile_updated"
+  | "style_profile_deleted"
+  | "style_profile_used";
 
 /**
  * Insert a usage event row. Never throws — errors are silently swallowed so

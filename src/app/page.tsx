@@ -8,9 +8,14 @@ export default function LandingPage() {
       {/* ── Top nav ─────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-40 w-full border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 pt-[env(safe-area-inset-top)]">
         <div className="mx-auto flex w-full max-w-md items-center justify-between px-4 py-3">
-          <span className="font-heading text-base font-semibold tracking-tight">
-            1nha
-          </span>
+          <div className="flex flex-col gap-0">
+            <span className="font-heading text-base font-semibold tracking-tight leading-none">
+              1nha
+            </span>
+            <span className="text-[10px] text-muted-foreground leading-none mt-0.5">
+              Kho nguồn &amp; trợ lý đăng bài
+            </span>
+          </div>
           <div className="flex items-center gap-2">
             <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
               Beta
@@ -30,13 +35,13 @@ export default function LandingPage() {
         <section className="flex flex-col items-start gap-5 py-12">
           <div className="flex flex-col gap-3">
             <h1 className="text-3xl font-bold tracking-tight leading-tight">
-              Nhập căn một lần.
+              Kho nguồn &amp; trợ lý đăng bài
               <br />
-              Có content cả tháng.
+              <span className="text-muted-foreground">cho môi giới BĐS</span>
             </h1>
             <p className="text-base text-muted-foreground leading-relaxed">
-              Trợ lý AI giúp môi giới bất động sản lưu nguồn hàng, tạo bài
-              đăng và quản lý content nhanh hơn.
+              Nhập nguồn một lần. Quản lý căn rõ ràng. Tạo content theo văn
+              phong của bạn. Chuẩn bị bài đăng nhanh hơn mỗi ngày.
             </p>
           </div>
 
@@ -45,43 +50,63 @@ export default function LandingPage() {
               href="/sign-in"
               className={cn(buttonVariants({ size: "lg" }), "h-12 w-full text-base")}
             >
-              Dùng thử beta
+              Dùng thử bản beta
             </Link>
             <a
-              href="#demo"
+              href="#features"
               className={cn(
                 buttonVariants({ variant: "outline", size: "lg" }),
                 "h-12 w-full text-base"
               )}
             >
-              Xem demo workflow
+              Xem cách hoạt động
             </a>
           </div>
         </section>
 
         {/* ── Feature cards ──────────────────────────────────────────── */}
-        <section id="demo" className="flex flex-col gap-4 py-8">
+        <section id="features" className="flex flex-col gap-4 py-8">
           <h2 className="text-lg font-semibold tracking-tight">
-            Mọi thứ môi giới cần, trong một app
+            Mọi thứ môi giới cần, trong một nơi
           </h2>
 
           <div className="flex flex-col gap-3">
             <FeatureCard
               icon="✨"
-              title="Nhập nhanh bằng AI"
-              description="Dán tin nhắn hoặc chụp ảnh màn hình — AI tự điền đầy đủ thông tin căn: giá, diện tích, pháp lý, vị trí."
+              title="Nhập nhanh nguồn hàng"
+              description="Dán tin nhắn hoặc chụp ảnh màn hình — AI tự bóc tách giá, diện tích, pháp lý, vị trí. Lưu căn trong vài giây."
             />
             <FeatureCard
-              icon="📝"
-              title="Tạo content bán nhà"
-              description="Chọn nền tảng, giọng văn, loại bài — 1nha viết bài đăng Facebook, Zalo, TikTok sẵn sàng copy."
+              icon="🗂️"
+              title="Kho nguồn rõ ràng"
+              description="Toàn bộ căn đang bán, ảnh và thông tin ở một nơi. Tìm lại, lọc và chăm nguồn cũ dễ dàng."
             />
             <FeatureCard
-              icon="📂"
-              title="Quản lý lịch sử bài đăng"
-              description="Tất cả content đã tạo được lưu theo từng căn. Tìm lại, sao chép và tái sử dụng bất cứ lúc nào."
+              icon="✍️"
+              title="Content theo văn phong riêng"
+              description="Dán bài mẫu, AI học cách bạn viết. Bài AI tạo ra giống phong cách của bạn hơn mỗi lần."
+            />
+            <FeatureCard
+              icon="📣"
+              title="Trợ lý đăng bài"
+              description="Copy nội dung, chọn ảnh, kiểm tra rồi đăng. 1nha chuẩn bị sẵn gói bài cho Facebook, Zalo hoặc TikTok."
+            />
+            <FeatureCard
+              icon="📅"
+              title="Lưu lịch sử đã đăng"
+              description="Đánh dấu đã đăng, ghi kênh, link bài. Không bị lễ nguồn nào chưa được chăm."
             />
           </div>
+        </section>
+
+        {/* ── Trust block ───────────────────────────────────────────── */}
+        <section className="flex flex-col gap-3 rounded-xl border border-border bg-muted/30 px-5 py-6 mb-2">
+          <p className="text-sm font-semibold">🔒 Nguồn của bạn là của bạn</p>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Khách của bạn là của bạn. 1nha chỉ thu phí phần mềm, không ăn
+            phần trăm giao dịch. 1nha chỉ là công cụ giúp bạn làm việc gọn
+            hơn, nhanh hơn và chuyên nghiệp hơn.
+          </p>
         </section>
 
         {/* ── Bottom CTA ─────────────────────────────────────────────── */}
@@ -93,7 +118,7 @@ export default function LandingPage() {
             href="/sign-in"
             className={cn(buttonVariants({ size: "lg" }), "h-12 w-full text-base")}
           >
-            Bắt đầu miễn phí
+            Dùng thử bản beta
           </Link>
         </section>
       </main>

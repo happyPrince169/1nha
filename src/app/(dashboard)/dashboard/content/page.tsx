@@ -10,7 +10,7 @@ import { ContentFilters, PLATFORM_LABELS, TYPE_LABELS } from "./content-filters"
 import { ContentStatusBadge } from "../properties/[id]/content/content-status-badge";
 import type { ContentStatus } from "@/types";
 
-export const metadata: Metadata = { title: "Lịch sử content" };
+export const metadata: Metadata = { title: "Nội dung" };
 
 type Props = {
   searchParams: Promise<{ platform?: string; status?: string; q?: string }>;
@@ -96,21 +96,16 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
   return (
     <div className="flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-0.5">
-          <h1 className="text-xl font-semibold tracking-tight">
-            Lịch sử content
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {filtered.length} mục
+          <h1 className="text-xl font-semibold tracking-tight">Nội dung</h1>
+          <p className="text-sm text-muted-foreground leading-snug">
+            Quản lý các bài đã tạo, đã chỉnh sửa, đã copy và đã đăng.
+            {filtered.length > 0 && (
+              <span className="ml-1 text-muted-foreground/70">({filtered.length} mục)</span>
+            )}
           </p>
         </div>
-        <Link
-          href="/dashboard"
-          className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-        >
-          ← Dashboard
-        </Link>
       </div>
 
       {/* Filters */}
@@ -140,16 +135,16 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
               📝
             </div>
             <div className="flex flex-col gap-1.5">
-              <p className="font-semibold">Chưa có content nào</p>
-              <p className="text-sm text-muted-foreground">
-                Mở một bất động sản và nhấn “Tạo content AI” để bắt đầu.
+              <p className="font-semibold">Chưa có nội dung nào</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Tạo content từ một căn trong kho nguồn để bắt đầu.
               </p>
             </div>
             <Link
               href="/dashboard/properties"
               className={cn(buttonVariants(), "w-full")}
             >
-              Xem danh sách bất động sản
+              🗂️ Vào kho nguồn
             </Link>
           </div>
         )

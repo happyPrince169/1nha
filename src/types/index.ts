@@ -139,6 +139,58 @@ export interface PropertyImage {
   created_at: string;
 }
 
+// --- Content Style Profiles (Văn phong riêng) ----------------------------
+
+/**
+ * Structured writing-style rules produced by the AI analyzer.
+ * Stored as JSONB in content_style_profiles.style_rules.
+ * All fields are narrative strings / string arrays — no enums —
+ * because the values are LLM-generated descriptions.
+ */
+export interface ContentStyleRules {
+  /** One-sentence summary of the overall writing style */
+  summary: string;
+  /** Tone description, e.g. "thân thiện, gần gũi, dùng ngôn ngữ đời thường" */
+  tone: string;
+  /** Typical post length, e.g. "150–200 từ" */
+  length: string;
+  /** How the content is structured, e.g. "mở đầu bằng câu hỏi, liệt kê gạch đầu dòng" */
+  structure: string;
+  /** Formatting conventions, e.g. "dùng emoji thay gạch đầu dòng, in hoa tiêu đề" */
+  formatting: string;
+  /** Emoji usage pattern, e.g. "dùng nhiều, 1–2 emoji mỗi đoạn" */
+  emoji_usage: string;
+  /** How posts typically open, e.g. "câu hỏi khơi gợi nhu cầu" */
+  opening_style: string;
+  /** Call-to-action style, e.g. "nhắn tin trực tiếp, có số điện thoại" */
+  cta_style: string;
+  /** Recurring phrases or vocabulary patterns */
+  phrase_patterns: string[];
+  /** Things to avoid in generated content */
+  avoid: string[];
+  /** Free-form instructions injected verbatim into the generation prompt */
+  generation_instructions: string;
+}
+
+export interface ContentStyleProfile {
+  id: string;
+  user_id: string;                    // FK → auth.users.id (set server-side only)
+  name: string;
+  description: string | null;
+  platform: string | null;            // e.g. "facebook", "zalo", "tiktok", null = all
+  sample_text: string | null;         // raw text the broker provided for analysis
+  style_rules: ContentStyleRules | null; // null until analysis completes
+  is_default: boolean;
+  created_at: string;
+  updated_at: string | null;
+}
+
+// Omit server-managed fields when creating a new profile
+export type ContentStyleProfileInsert = Omit<
+  ContentStyleProfile,
+  "id" | "user_id" | "created_at" | "updated_at"
+>;
+
 // --- Dashboard stats (computed client-side / via RPC) ---------------------
 
 export interface DashboardStats {

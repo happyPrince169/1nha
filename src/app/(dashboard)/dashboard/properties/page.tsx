@@ -15,7 +15,7 @@ import {
   type ActiveFilterPill,
 } from "./property-filters";
 
-export const metadata: Metadata = { title: "Bất động sản" };
+export const metadata: Metadata = { title: "Kho nguồn" };
 
 const BUCKET = "property-images";
 const SIGNED_URL_TTL = 3600;
@@ -290,9 +290,14 @@ export default async function PropertiesPage({ searchParams }: Props) {
   return (
     <div className="flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold tracking-tight">Bất động sản</h1>
-        <div className="flex gap-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h1 className="text-xl font-semibold tracking-tight">Kho nguồn</h1>
+          <p className="text-sm text-muted-foreground leading-snug">
+            Quản lý toàn bộ căn đang bán, đã lưu trữ và nguồn cần chăm lại.
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
           <Link
             href="/dashboard/properties/quick-add"
             className={cn(buttonVariants({ size: "sm" }))}
@@ -387,9 +392,9 @@ export default async function PropertiesPage({ searchParams }: Props) {
               🏠
             </div>
             <div className="flex flex-col gap-1.5">
-              <p className="font-semibold">Chưa có căn nào</p>
-              <p className="text-sm text-muted-foreground">
-                Thêm căn đầu tiên để bắt đầu lưu nguồn hàng và tạo content.
+              <p className="font-semibold">Bạn chưa có căn nào trong kho nguồn</p>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Nhập căn đầu tiên để 1nha giúp bạn tạo content, lưu ảnh và chuẩn bị bài đăng.
               </p>
             </div>
             <div className="flex w-full flex-col gap-2">
@@ -397,13 +402,13 @@ export default async function PropertiesPage({ searchParams }: Props) {
                 href="/dashboard/properties/quick-add"
                 className={cn(buttonVariants(), "w-full")}
               >
-                ✨ Nhập nhanh bằng AI
+                ✨ Nhập nhanh nguồn mới
               </Link>
               <Link
                 href="/dashboard/properties/new"
                 className={cn(buttonVariants({ variant: "outline" }), "w-full")}
               >
-                Thêm thủ công
+                Thêm căn thủ công
               </Link>
             </div>
           </div>
