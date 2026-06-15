@@ -188,6 +188,55 @@ export async function archiveContent(contentId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// updateContentText
+//
+// Saves an edited version of the AI-generated text body.
+// Sets updated_at and edited_at = now() so the UI can show an "edited" badge.
+// Scoped by both id and user_id.
+// ---------------------------------------------------------------------------
+export type UpdateTextState = { error: string | null; success: boolean };
+
+export async function updateContentText(
+  contentId: string,
+  _prev: UpdateTextState,
+  formData: FormData
+): Promise<UpdateTextState> {
+  const { supabase, user } = await getAuthenticatedUser();
+  if (!user) return { error: "Bạn cần đăng nhập.", success: false };
+
+  const content = await fetchOwnedContent(supabase, contentId, user.id);
+  if (!content) return { error: "Không tìm thấy content.", success: false };
+
+  const raw = formData.get("output_text");
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { error: "Nội dung không được để trống.", success: false };
+  }
+  const text = raw.trim();
+
+  const now = new Date().toISOString();
+
+  const { error } = await supabase
+    .from("generated_contents")
+    .update({
+      content: text,
+      updated_at: now,
+      edited_at: now,
+    })
+    .eq("id", contentId)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message, success: false };
+
+  await trackEvent(supabase, user.id, "content_edited", {
+    content_id: contentId,
+    property_id: content.property_id,
+  });
+
+  revalidateContentPaths(content.property_id, contentId);
+  return { error: null, success: true };
+}
+
+// ---------------------------------------------------------------------------
 // updateContentNotes
 //
 // Saves the notes field. No status change.

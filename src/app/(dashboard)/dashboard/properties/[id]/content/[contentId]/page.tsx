@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { CopyButton } from "../copy-button";
 import { ContentStatusBadge } from "../content-status-badge";
+import { ContentEditForm } from "../content-edit-form";
 import { MarkPostedForm } from "../mark-posted-form";
 import { NotesForm } from "../notes-form";
 import { ArchiveContentButton } from "../archive-content-button";
@@ -73,8 +74,8 @@ export default async function ContentOutputPage({ params }: Props) {
 
   if (!user) return null;
 
-  // Fetch the generated content — scoped to both user_id and property_id.
-  // We cast the result because Supabase type-gen predates the workspace migration.
+  // Supabase type-gen predates the workspace + edit migrations, so we
+  // cast the result with a local type that includes all columns we select.
   type ContentRow = {
     id: string;
     platform: string | null;
@@ -82,6 +83,8 @@ export default async function ContentOutputPage({ params }: Props) {
     content_type: string | null;
     content: string;
     created_at: string;
+    updated_at: string | null;
+    edited_at: string | null;
     property_id: string;
     status: string | null;
     copied_at: string | null;
@@ -94,7 +97,7 @@ export default async function ContentOutputPage({ params }: Props) {
 
   const { data: content, error } = await supabase
     .from("generated_contents")
-    .select("id,platform,tone,content_type,content,created_at,property_id,status,copied_at,scheduled_at,posted_at,post_url,channel_name,notes")
+    .select("id,platform,tone,content_type,content,created_at,updated_at,edited_at,property_id,status,copied_at,scheduled_at,posted_at,post_url,channel_name,notes")
     .eq("id", contentId)
     .eq("user_id", user.id)
     .eq("property_id", id)
@@ -185,19 +188,33 @@ export default async function ContentOutputPage({ params }: Props) {
         </p>
       )}
 
-      {/* Generated content */}
+      {/* Generated content — editable when not archived */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Nội dung đã tạo</CardTitle>
+        <CardHeader className="gap-1">
+          <CardTitle className="text-base">Nội dung bài đăng</CardTitle>
+          {content.edited_at && (
+            <p className="text-xs text-muted-foreground">
+              ✒ Đã chỉnh sửa lúc {formatDate(content.edited_at)}
+            </p>
+          )}
         </CardHeader>
         <CardContent>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed">
-            {content.content}
-          </p>
+          {isArchived ? (
+            // Archived: read-only view
+            <p className="whitespace-pre-wrap text-sm leading-relaxed">
+              {content.content}
+            </p>
+          ) : (
+            // Active: inline editable textarea
+            <ContentEditForm
+              contentId={contentId}
+              initialText={content.content}
+            />
+          )}
         </CardContent>
       </Card>
 
-      {/* Copy button */}
+      {/* Copy button — text prop is always the DB-current value (server render) */}
       {!isArchived && (
         <CopyButton text={content.content} contentId={contentId} />
       )}

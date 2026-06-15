@@ -68,6 +68,39 @@ export default async function PropertyDetailPage({ params }: Props) {
 
   if (error || !property) notFound();
 
+  // Fetch cover image (or first image) for the images section preview
+  const { data: coverImages } = await supabase
+    .from("property_images")
+    .select("id, storage_path, file_name, alt_text, is_cover")
+    .eq("property_id", id)
+    .eq("user_id", user.id)
+    .order("is_cover", { ascending: false })
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: true })
+    .limit(3);
+
+  // Generate signed URLs for the preview images
+  type CoverImageRow = NonNullable<typeof coverImages>[number];
+  type CoverImageWithUrl = CoverImageRow & { signedUrl: string };
+  let previewImages: CoverImageWithUrl[] = [];
+
+  if (coverImages && coverImages.length > 0) {
+    const { data: signedData } = await supabase.storage
+      .from("property-images")
+      .createSignedUrls(
+        coverImages.map((img) => img.storage_path),
+        3600
+      );
+    const urlMap = new Map<string, string>();
+    for (const item of signedData ?? []) {
+      if (item.path && item.signedUrl) urlMap.set(item.path, item.signedUrl);
+    }
+    previewImages = coverImages.map((img) => ({
+      ...img,
+      signedUrl: urlMap.get(img.storage_path) ?? "",
+    }));
+  }
+
   // Fetch the 10 most recent generated contents for this property
   const { data: contents } = await supabase
     .from("generated_contents")
@@ -146,6 +179,61 @@ export default async function PropertyDetailPage({ params }: Props) {
       <NotesCard title="Điểm yếu" value={property.weaknesses} />
       <NotesCard title="Ghi chú chủ nhà" value={property.owner_note} />
       <NotesCard title="Ghi chú quy hoạch" value={property.planning_note} />
+
+      {/* Images section */}
+      <Separator />
+
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-base font-semibold">Hình ảnh căn nhà</h2>
+        <Link
+          href={`/dashboard/properties/${id}/images`}
+          className={cn(
+            buttonVariants({ variant: "ghost", size: "sm" }),
+            "text-muted-foreground"
+          )}
+        >
+          Quản lý →
+        </Link>
+      </div>
+
+      {previewImages.length === 0 ? (
+        <Link
+          href={`/dashboard/properties/${id}/images`}
+          className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-muted/20 px-5 py-6 text-center transition-colors hover:bg-muted/30"
+        >
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-xl bg-muted text-xl"
+            aria-hidden
+          >
+            📷
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Chưa có ảnh nào — nhấn để tải ảnh lên
+          </p>
+        </Link>
+      ) : (
+        <div className="grid grid-cols-3 gap-2">
+          {previewImages.map((img) => (
+            <Link
+              key={img.id}
+              href={`/dashboard/properties/${id}/images`}
+              className="relative block overflow-hidden rounded-lg"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={img.signedUrl}
+                alt={img.alt_text ?? img.file_name ?? "Hình ảnh căn nhà"}
+                className="h-24 w-full object-cover transition-opacity hover:opacity-90"
+              />
+              {img.is_cover && (
+                <span className="absolute left-1 top-1 rounded bg-foreground/80 px-1 py-px text-[10px] font-semibold text-background">
+                  Bìa
+                </span>
+              )}
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* Content history — always shown for non-archived properties */}
       {property.status !== "archived" && (

@@ -116,6 +116,27 @@ export interface GeneratedContent {
   channel_name: string | null;
   notes: string | null;
   parent_content_id: string | null;
+  updated_at: string | null;
+  edited_at: string | null;   // set only on broker manual edits, not AI generation
+}
+
+// --- Property Images ------------------------------------------------------
+
+export interface PropertyImage {
+  id: string;
+  user_id: string;          // FK → auth.users.id (set server-side only)
+  property_id: string;      // FK → properties.id
+  storage_path: string;     // path inside the private bucket, never a public URL
+  file_name: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  width: number | null;
+  height: number | null;
+  alt_text: string | null;
+  caption: string | null;
+  sort_order: number;       // default 0
+  is_cover: boolean;        // default false
+  created_at: string;
 }
 
 // --- Dashboard stats (computed client-side / via RPC) ---------------------
