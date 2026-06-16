@@ -3,6 +3,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  getPropertyImageSignedUrls,
+  R2_PENDING_PATH,
+} from "@/lib/storage/property-media";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { Badge } from "@/components/ui/badge";
@@ -71,33 +75,30 @@ export default async function PropertyDetailPage({ params }: Props) {
   // Fetch cover image (or first image) for the images section preview
   const { data: coverImages } = await supabase
     .from("property_images")
-    .select("id, storage_path, file_name, alt_text, is_cover")
+    .select(
+      "id, storage_path, file_name, alt_text, is_cover, storage_provider, original_key, thumbnail_key, preview_key"
+    )
     .eq("property_id", id)
     .eq("user_id", user.id)
+    .neq("storage_path", "__pending__")
+    .neq("storage_path", R2_PENDING_PATH)
     .order("is_cover", { ascending: false })
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true })
     .limit(3);
 
-  // Generate signed URLs for the preview images
+  // Generate signed URLs for the preview images (provider-aware, batched)
   type CoverImageRow = NonNullable<typeof coverImages>[number];
   type CoverImageWithUrl = CoverImageRow & { signedUrl: string };
   let previewImages: CoverImageWithUrl[] = [];
 
   if (coverImages && coverImages.length > 0) {
-    const { data: signedData } = await supabase.storage
-      .from("property-images")
-      .createSignedUrls(
-        coverImages.map((img) => img.storage_path),
-        3600
-      );
-    const urlMap = new Map<string, string>();
-    for (const item of signedData ?? []) {
-      if (item.path && item.signedUrl) urlMap.set(item.path, item.signedUrl);
-    }
+    const urlById = await getPropertyImageSignedUrls(coverImages, supabase, {
+      variant: "thumbnail",
+    });
     previewImages = coverImages.map((img) => ({
       ...img,
-      signedUrl: urlMap.get(img.storage_path) ?? "",
+      signedUrl: urlById.get(img.id) ?? "",
     }));
   }
 

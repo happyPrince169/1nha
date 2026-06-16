@@ -105,9 +105,9 @@ export function buildStyleRulesSection(
   if (lines.length === 0) return null;
 
   return [
-    "=== VĂN PHONG CẦN ÁP DỤNG ===",
-    "Hãy viết theo style profile dưới đây.",
-    "Chỉ học giọng văn, cấu trúc, cách xuống dòng, cách CTA, cách dùng emoji và nhịp trình bày.",
+    "=== GIỌNG VĂN CẦN ÁP DỤNG ===",
+    "Hãy viết theo giọng văn/văn phong đã học dưới đây.",
+    "Chỉ học cách hành văn, cấu trúc, cách xuống dòng, cách CTA, cách dùng emoji và nhịp trình bày.",
     "Không sao chép nguyên văn câu chữ từ bài mẫu.",
     "Không bịa thông tin không có trong dữ liệu căn.",
     "Nếu dữ liệu căn thiếu pháp lý, hướng, số tầng, mặt tiền, ngõ, quy hoạch, số nhà, thông tin chủ nhà thì không được tự thêm.",

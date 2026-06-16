@@ -1,9 +1,18 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
+
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
 import { trackEvent } from "@/lib/usage";
+import {
+  createPropertyImageUploadTarget,
+  deleteR2Object,
+  R2_PENDING_PATH,
+  StorageConfigError,
+  StorageValidationError,
+} from "@/lib/storage/property-media";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,20 +67,35 @@ async function requireImageOwnership(
 ) {
   const { data, error } = await supabase
     .from("property_images")
-    .select("id, storage_path, is_cover")
+    .select(
+      "id, storage_path, is_cover, storage_provider, original_key, thumbnail_key, preview_key"
+    )
     .eq("id", imageId)
     .eq("property_id", propertyId)
     .eq("user_id", userId)
     .single();
 
   if (error || !data) throw new ActionError("Không tìm thấy hình ảnh.");
-  return data;
+  return data as ImageOwnershipRow;
 }
+
+/** The image columns needed to delete/finalize across both storage providers. */
+type ImageOwnershipRow = {
+  id: string;
+  storage_path: string | null;
+  is_cover: boolean;
+  storage_provider: string | null;
+  original_key: string | null;
+  thumbnail_key: string | null;
+  preview_key: string | null;
+};
 
 /** Revalidate all paths that display property images. */
 function revalidateImagePaths(propertyId: string) {
   revalidatePath(`/dashboard/properties/${propertyId}/images`);
   revalidatePath(`/dashboard/properties/${propertyId}`);
+  // Property list shows cover thumbnails.
+  revalidatePath(`/dashboard/properties`);
 }
 
 /** Build the canonical storage path for a new image. */
@@ -109,14 +133,14 @@ export type ImageActionState = {
 };
 
 // ---------------------------------------------------------------------------
-// uploadPropertyImage
+// uploadPropertyImage  (LEGACY — Supabase Storage)
 //
-// Receives a multipart FormData with `image` File.
-// 1. Validates auth + ownership.
-// 2. Validates mime type + size.
-// 3. Inserts a placeholder row to get a stable UUID for the storage path.
-// 4. Uploads to private bucket using the UUID-based path.
-// 5. Updates the row with the confirmed path + metadata.
+// Retained as a fallback path that routes file bytes through the Server Action
+// into the Supabase Storage bucket. New uploads use the R2 presigned flow below
+// (requestPropertyImageUpload → direct browser PUT → finalizePropertyImageUpload)
+// to keep large files off the Server Action and store media in Cloudflare R2.
+// Do not delete: it still works for environments without R2 configured and
+// documents the original flow.
 // ---------------------------------------------------------------------------
 export async function uploadPropertyImage(
   propertyId: string,
@@ -216,6 +240,165 @@ export async function uploadPropertyImage(
 }
 
 // ---------------------------------------------------------------------------
+// requestPropertyImageUpload  (Cloudflare R2 — step 1 of 2)
+//
+// Validates ownership + file constraints, presigns a PUT URL for R2, and
+// inserts a "pending" metadata row (storage_provider = 'cloudflare_r2',
+// storage_path = R2_PENDING_PATH). The browser then uploads bytes directly to
+// R2 using the returned uploadUrl, and calls finalizePropertyImageUpload.
+//
+// Bytes never pass through this Server Action — only metadata + a presigned URL.
+// ---------------------------------------------------------------------------
+export type RequestUploadInput = {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export type RequestUploadResult =
+  | {
+      ok: true;
+      imageId: string;
+      uploadUrl: string;
+      originalKey: string;
+      /** Echoed back so the browser PUTs with the exact signed Content-Type. */
+      contentType: string;
+      expiresIn: number;
+    }
+  | { ok: false; error: string };
+
+export async function requestPropertyImageUpload(
+  propertyId: string,
+  input: RequestUploadInput
+): Promise<RequestUploadResult> {
+  try {
+    const { supabase, user } = await requireUser();
+    await requirePropertyOwnership(supabase, propertyId, user.id);
+
+    const { fileName, mimeType, sizeBytes } = input;
+
+    if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+      return {
+        ok: false,
+        error: "Định dạng không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP.",
+      };
+    }
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+      return { ok: false, error: "Tệp ảnh không hợp lệ." };
+    }
+    if (sizeBytes > MAX_BYTES) {
+      return {
+        ok: false,
+        error: `Ảnh quá lớn (${(sizeBytes / 1024 / 1024).toFixed(1)} MB). Tối đa 2 MB.`,
+      };
+    }
+
+    // Generate the id first so the R2 key is stable and we can presign before
+    // touching the database — a config/validation failure leaves no orphan row.
+    const imageId = randomUUID();
+
+    let target;
+    try {
+      target = await createPropertyImageUploadTarget({
+        userId: user.id,
+        propertyId,
+        imageId,
+        fileName,
+        mimeType,
+        sizeBytes,
+      });
+    } catch (err) {
+      if (
+        err instanceof StorageConfigError ||
+        err instanceof StorageValidationError
+      ) {
+        return { ok: false, error: err.message };
+      }
+      return { ok: false, error: "Không thể tạo liên kết tải lên R2." };
+    }
+
+    const { error: insertError } = await supabase
+      .from("property_images")
+      .insert({
+        id: imageId,
+        user_id: user.id,
+        property_id: propertyId,
+        storage_provider: "cloudflare_r2",
+        storage_path: R2_PENDING_PATH, // replaced with original_key on finalize
+        original_key: target.originalKey,
+        file_name: fileName,
+        mime_type: mimeType,
+        size_bytes: sizeBytes,
+        original_mime_type: mimeType,
+        original_size_bytes: sizeBytes,
+      });
+
+    if (insertError) {
+      return { ok: false, error: insertError.message };
+    }
+
+    return {
+      ok: true,
+      imageId,
+      uploadUrl: target.uploadUrl,
+      originalKey: target.originalKey,
+      contentType: mimeType,
+      expiresIn: target.expiresIn,
+    };
+  } catch (err) {
+    if (err instanceof ActionError) return { ok: false, error: err.message };
+    return { ok: false, error: "Lỗi không xác định. Vui lòng thử lại." };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// finalizePropertyImageUpload  (Cloudflare R2 — step 2 of 2)
+//
+// Called after the browser has PUT the bytes to R2. Re-verifies ownership and
+// marks the row ready by mirroring original_key into storage_path (so any code
+// still reading storage_path keeps working), then revalidates image surfaces.
+// ---------------------------------------------------------------------------
+export type FinalizeUploadResult = { ok: true } | { ok: false; error: string };
+
+export async function finalizePropertyImageUpload(
+  propertyId: string,
+  imageId: string
+): Promise<FinalizeUploadResult> {
+  try {
+    const { supabase, user } = await requireUser();
+    await requirePropertyOwnership(supabase, propertyId, user.id);
+    const image = await requireImageOwnership(
+      supabase,
+      imageId,
+      propertyId,
+      user.id
+    );
+
+    const readyPath = image.original_key ?? image.storage_path;
+
+    const { error } = await supabase
+      .from("property_images")
+      .update({ storage_path: readyPath })
+      .eq("id", imageId)
+      .eq("user_id", user.id)
+      .eq("property_id", propertyId);
+
+    if (error) return { ok: false, error: error.message };
+
+    await trackEvent(supabase, user.id, "property_image_uploaded", {
+      property_id: propertyId,
+      image_id: imageId,
+    });
+
+    revalidateImagePaths(propertyId);
+    return { ok: true };
+  } catch (err) {
+    if (err instanceof ActionError) return { ok: false, error: err.message };
+    return { ok: false, error: "Lỗi không xác định." };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // setPropertyCoverImage
 //
 // Atomically: clears is_cover on all images for the property,
@@ -276,9 +459,27 @@ export async function deletePropertyImage(
       user.id
     );
 
-    // Delete from storage first — if this fails the metadata row stays intact,
-    // which is the safer inconsistency (orphaned metadata vs orphaned storage).
-    if (image.storage_path && image.storage_path !== "__pending__") {
+    // Delete the stored object(s) first. A missing object is treated as
+    // non-fatal so DB cleanup always proceeds — the operation stays idempotent.
+    if (image.storage_provider === "cloudflare_r2") {
+      const keys = [
+        image.original_key,
+        image.thumbnail_key,
+        image.preview_key,
+      ].filter((k): k is string => typeof k === "string" && k.length > 0);
+      for (const key of keys) {
+        try {
+          await deleteR2Object(key);
+        } catch {
+          // Object already gone / transient R2 error — safe to ignore here.
+        }
+      }
+    } else if (
+      image.storage_path &&
+      image.storage_path !== "__pending__" &&
+      image.storage_path !== R2_PENDING_PATH
+    ) {
+      // Legacy Supabase Storage row.
       await supabase.storage.from(BUCKET).remove([image.storage_path]);
     }
 

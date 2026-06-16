@@ -266,7 +266,7 @@ Tasks:
 
 ## Medium-Term Roadmap
 
-### 1. Storage Abstraction and Cloudflare R2
+### 1. Storage Abstraction and Cloudflare R2 — 🟡 IN PROGRESS
 
 Goal:
 
@@ -274,19 +274,34 @@ Goal:
 Prepare for scalable image/video media.
 ```
 
-Preferred direction:
+Direction:
 
 ```text
 Supabase/Postgres for metadata
 Cloudflare R2 for media files
-Optional Cloudflare Images for transformations
-Optional Cloudflare Stream for video playback
+Optional Cloudflare Images for transformations (later)
+Optional Cloudflare Stream for video playback (later)
 ```
 
-Implementation should introduce abstraction before migration:
+Done (this sprint):
 
 ```text
-src/lib/storage/property-media.ts
+- src/lib/storage/property-media.ts provider-aware abstraction
+- New property image uploads go to Cloudflare R2 (presigned PUT, direct from browser)
+- property_images gains storage_provider + R2 key columns (migration 20240108000001)
+- All image surfaces (gallery, property detail, property list, post assistant)
+  read both R2 and legacy Supabase rows via getPropertyImageSignedUrls()
+- Provider-aware delete; legacy Supabase Storage retained as fallback
+```
+
+Follow-up tasks:
+
+```text
+- Migrate existing Supabase Storage images to R2 (backfill original_key, flip provider)
+- Generate thumbnails/previews client-side (resize/compress) and upload thumb + original
+  → populate thumbnail_key / preview_key (schema already in place)
+- Add video media support (Cloudflare Stream) via the same abstraction
+- Consider Cloudflare Images for on-the-fly transforms
 ```
 
 ### 2. Viewing Records

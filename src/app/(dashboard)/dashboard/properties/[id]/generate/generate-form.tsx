@@ -16,12 +16,14 @@ const PLATFORMS = [
   { value: "tiktok", label: "TikTok" },
 ] as const;
 
-const TONES = [
-  { value: "professional", label: "Chuyên nghiệp" },
-  { value: "urgent", label: "Khẩn cấp" },
-  { value: "luxury", label: "Cao cấp" },
-  { value: "family", label: "Gia đình" },
-  { value: "investor", label: "Đầu tư" },
+// Built-in tone options. Submitted value is namespaced "tone:<id>" so the
+// single "Giọng văn" field can also carry saved style profiles ("style:<id>").
+const BUILTIN_TONES = [
+  { value: "tone:professional", label: "Chuyên nghiệp" },
+  { value: "tone:urgent", label: "Gấp / chốt nhanh" },
+  { value: "tone:luxury", label: "Cao cấp" },
+  { value: "tone:family", label: "Gia đình" },
+  { value: "tone:investor", label: "Đầu tư" },
 ] as const;
 
 const CONTENT_TYPES = [
@@ -57,38 +59,20 @@ const initialState: GenerateContentState = { error: null };
 export function GenerateForm({ action, profiles }: Props) {
   const [state, formAction, isPending] = useActionState(action, initialState);
 
-  // Preselect the default profile if the user has one; otherwise the 1nha voice.
+  // Saved style profiles become "style:<id>" voice options. Preselect the
+  // default profile if the user has one; otherwise the built-in professional tone.
   const defaultProfile = profiles.find((p) => p.is_default);
+  const defaultVoice = defaultProfile
+    ? `style:${defaultProfile.id}`
+    : "tone:professional";
+  const profileVoiceOptions = profiles.map((p) => ({
+    value: `style:${p.id}`,
+    label: p.name,
+  }));
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
       {state.error && <FormError>{state.error}</FormError>}
-
-      {/* Writing-style profile */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Văn phong</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2">
-          <select
-            name="style_profile_id"
-            defaultValue={defaultProfile?.id ?? ""}
-            disabled={isPending}
-            className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm focus:border-foreground focus:outline-none disabled:opacity-50"
-          >
-            <option value="">Mặc định 1nha</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-                {p.is_default ? " (mặc định)" : ""}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-muted-foreground">
-            Chọn văn phong đã học để bài viết giống cách bạn thường đăng hơn.
-          </p>
-        </CardContent>
-      </Card>
 
       {/* Platform */}
       <Card>
@@ -105,18 +89,35 @@ export function GenerateForm({ action, profiles }: Props) {
         </CardContent>
       </Card>
 
-      {/* Tone */}
+      {/* Giọng văn — built-in tones + saved style profiles, one field */}
       <Card>
         <CardHeader>
           <CardTitle>Giọng văn</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
           <OptionGroup
-            name="tone"
-            options={TONES}
-            defaultValue="professional"
+            name="voice"
+            options={BUILTIN_TONES}
+            defaultValue={defaultVoice}
             disabled={isPending}
           />
+          {profileVoiceOptions.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                Văn phong đã học
+              </p>
+              <OptionGroup
+                name="voice"
+                options={profileVoiceOptions}
+                defaultValue={defaultVoice}
+                disabled={isPending}
+              />
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Chọn giọng văn có sẵn hoặc văn phong bạn đã lưu để bài viết giống
+            cách bạn thường đăng hơn.
+          </p>
         </CardContent>
       </Card>
 

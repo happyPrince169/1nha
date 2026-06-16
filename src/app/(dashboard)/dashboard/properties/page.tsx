@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  getPropertyImageSignedUrls,
+  R2_PENDING_PATH,
+} from "@/lib/storage/property-media";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { buttonVariants } from "@/components/ui/button";
@@ -16,9 +20,6 @@ import {
 } from "./property-filters";
 
 export const metadata: Metadata = { title: "Kho nguồn" };
-
-const BUCKET = "property-images";
-const SIGNED_URL_TTL = 3600;
 
 // ---------------------------------------------------------------------------
 // Allowed value sets — used to sanitise URL params before using in queries
@@ -251,34 +252,36 @@ export default async function PropertiesPage({ searchParams }: Props) {
 
     const { data: imageRows } = await supabase
       .from("property_images")
-      .select("property_id, storage_path")
+      .select(
+        "id, property_id, storage_provider, storage_path, original_key, thumbnail_key, preview_key"
+      )
       .eq("user_id", user.id)
       .in("property_id", propertyIds)
       .neq("storage_path", "__pending__")
+      .neq("storage_path", R2_PENDING_PATH)
       .order("is_cover", { ascending: false })
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
 
     if (imageRows && imageRows.length > 0) {
-      const firstImagePerProperty = new Map<string, string>();
+      // First image per property (cover/sort/created order already applied).
+      type ImageRow = (typeof imageRows)[number];
+      const firstByProperty = new Map<string, ImageRow>();
       for (const row of imageRows) {
-        if (!firstImagePerProperty.has(row.property_id)) {
-          firstImagePerProperty.set(row.property_id, row.storage_path);
+        if (!firstByProperty.has(row.property_id)) {
+          firstByProperty.set(row.property_id, row);
         }
       }
 
-      const paths = Array.from(firstImagePerProperty.values());
-      const { data: signedData } = await supabase.storage
-        .from(BUCKET)
-        .createSignedUrls(paths, SIGNED_URL_TTL);
+      // Batched per provider; prefer thumbnail keys for list thumbnails.
+      const urlById = await getPropertyImageSignedUrls(
+        Array.from(firstByProperty.values()),
+        supabase,
+        { variant: "thumbnail" }
+      );
 
-      const urlByPath = new Map<string, string>();
-      for (const item of signedData ?? []) {
-        if (item.path && item.signedUrl) urlByPath.set(item.path, item.signedUrl);
-      }
-
-      for (const [propId, storagePath] of firstImagePerProperty) {
-        const url = urlByPath.get(storagePath);
+      for (const [propId, row] of firstByProperty) {
+        const url = urlById.get(row.id);
         if (url) thumbnailMap.set(propId, url);
       }
     }

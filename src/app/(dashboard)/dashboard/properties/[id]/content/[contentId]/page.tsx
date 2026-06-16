@@ -157,7 +157,9 @@ export default async function ContentOutputPage({ params }: Props) {
             {PLATFORM_LABELS[content.platform] ?? content.platform}
           </Badge>
         )}
-        {content.tone && (
+        {/* Built-in tone badge — hidden when a saved style profile was used,
+            since its stored tone is just a schema-compatible fallback. */}
+        {content.tone && !styleProfileName && (
           <Badge variant="outline">
             {TONE_LABELS[content.tone] ?? content.tone}
           </Badge>
@@ -173,7 +175,7 @@ export default async function ContentOutputPage({ params }: Props) {
       {/* Style profile used */}
       {styleProfileName && (
         <p className="text-xs text-muted-foreground">
-          Văn phong: {styleProfileName}
+          Giọng văn: {styleProfileName}
         </p>
       )}
 

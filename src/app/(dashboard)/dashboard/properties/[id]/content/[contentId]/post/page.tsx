@@ -3,6 +3,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  getPropertyImageSignedUrls,
+  R2_PENDING_PATH,
+} from "@/lib/storage/property-media";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { buttonVariants } from "@/components/ui/button";
@@ -17,9 +21,6 @@ import { PlatformSelector } from "./platform-selector";
 import { PostImagePicker, type PickerImage } from "./post-image-picker";
 
 export const metadata: Metadata = { title: "Trợ lý đăng bài" };
-
-const BUCKET = "property-images";
-const SIGNED_URL_TTL = 3600;
 
 type Props = {
   params: Promise<{ id: string; contentId: string }>;
@@ -56,6 +57,10 @@ type ImageRow = {
   alt_text: string | null;
   caption: string | null;
   is_cover: boolean;
+  storage_provider: string | null;
+  original_key: string | null;
+  thumbnail_key: string | null;
+  preview_key: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -112,10 +117,13 @@ export default async function PostAssistantPage({ params }: Props) {
   // ---------------------------------------------------------------------------
   const { data: imageRows } = await supabase
     .from("property_images")
-    .select("id,storage_path,alt_text,caption,is_cover")
+    .select(
+      "id,storage_path,alt_text,caption,is_cover,storage_provider,original_key,thumbnail_key,preview_key"
+    )
     .eq("property_id", id)
     .eq("user_id", user.id)
     .neq("storage_path", "__pending__")
+    .neq("storage_path", R2_PENDING_PATH)
     .order("is_cover", { ascending: false })
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true }) as unknown as {
@@ -125,20 +133,14 @@ export default async function PostAssistantPage({ params }: Props) {
   let pickerImages: PickerImage[] = [];
 
   if (imageRows && imageRows.length > 0) {
-    const paths = imageRows.map((r) => r.storage_path);
-    const { data: signedData } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrls(paths, SIGNED_URL_TTL);
-
-    const urlByPath = new Map<string, string>();
-    for (const item of signedData ?? []) {
-      if (item.path && item.signedUrl) urlByPath.set(item.path, item.signedUrl);
-    }
+    // Post Assistant needs full-resolution images for download/copy/open, so
+    // sign the originals (default variant). Works for both R2 and legacy rows.
+    const urlById = await getPropertyImageSignedUrls(imageRows, supabase);
 
     pickerImages = imageRows
       .map((r) => ({
         id: r.id,
-        signedUrl: urlByPath.get(r.storage_path) ?? "",
+        signedUrl: urlById.get(r.id) ?? "",
         altText: r.alt_text,
         caption: r.caption,
         isCover: r.is_cover,

@@ -55,45 +55,54 @@ export async function generatePropertyContent(
 
   // --- parse & validate options --------------------------------------------
   const platformRaw = formData.get("platform");
-  const toneRaw = formData.get("tone");
+  const voiceRaw = formData.get("voice");
   const contentTypeRaw = formData.get("content_type");
 
   const platform = PLATFORMS.includes(platformRaw as ContentPlatform)
     ? (platformRaw as ContentPlatform)
-    : null;
-  const tone = TONES.includes(toneRaw as ContentTone)
-    ? (toneRaw as ContentTone)
     : null;
   const content_type = CONTENT_TYPES.includes(contentTypeRaw as ContentType)
     ? (contentTypeRaw as ContentType)
     : null;
 
   if (!platform) return { error: "Vui lòng chọn nền tảng." };
-  if (!tone) return { error: "Vui lòng chọn giọng văn." };
   if (!content_type) return { error: "Vui lòng chọn loại content." };
 
-  // --- resolve optional style profile (scoped to authenticated user) -------
-  const styleProfileIdRaw = formData.get("style_profile_id");
-  const styleProfileId =
-    typeof styleProfileIdRaw === "string" && styleProfileIdRaw.trim().length > 0
-      ? styleProfileIdRaw.trim()
-      : null;
+  // --- resolve the combined "Giọng văn" value ------------------------------
+  // "tone:<id>"  → built-in tone, no style profile.
+  // "style:<id>" → saved style profile (scoped to user); tone falls back to a
+  //                schema-compatible default since the pipeline still stores tone.
+  const voice = typeof voiceRaw === "string" ? voiceRaw : "";
 
+  let tone: ContentTone | null = null;
+  let styleProfileId: string | null = null;
   let styleRules: ContentStyleRules | null = null;
-  if (styleProfileId) {
-    const { data: profile, error: profileError } = await supabase
-      .from("content_style_profiles")
-      .select("id,style_rules")
-      .eq("id", styleProfileId)
-      .eq("user_id", user.id) // never allow another user's profile
-      .single();
 
-    if (profileError || !profile) {
-      return { error: "Không tìm thấy văn phong đã chọn." };
+  if (voice.startsWith("tone:")) {
+    const candidate = voice.slice("tone:".length) as ContentTone;
+    tone = TONES.includes(candidate) ? candidate : null;
+  } else if (voice.startsWith("style:")) {
+    const candidateId = voice.slice("style:".length).trim();
+    styleProfileId = candidateId.length > 0 ? candidateId : null;
+
+    if (styleProfileId) {
+      const { data: profile, error: profileError } = await supabase
+        .from("content_style_profiles")
+        .select("id,style_rules")
+        .eq("id", styleProfileId)
+        .eq("user_id", user.id) // never allow another user's profile
+        .single();
+
+      if (profileError || !profile) {
+        return { error: "Không tìm thấy giọng văn đã chọn." };
+      }
+
+      styleRules = (profile.style_rules as ContentStyleRules | null) ?? null;
+      tone = "professional"; // sensible default — pipeline still records a tone
     }
-
-    styleRules = (profile.style_rules as ContentStyleRules | null) ?? null;
   }
+
+  if (!tone) return { error: "Vui lòng chọn giọng văn." };
 
   // --- fetch property (scoped to authenticated user) -----------------------
   const { data: property, error: propError } = await supabase

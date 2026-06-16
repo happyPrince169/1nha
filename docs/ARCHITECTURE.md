@@ -265,28 +265,72 @@ Do not implement social auto-posting unless explicitly requested and legally/tec
 
 ## Media Direction
 
-Current media may be Supabase Storage.
-
-Future preferred direction:
+Current state (implemented):
 
 ```text
-Cloudflare R2 as main media store
-Supabase/Postgres for metadata
-Optional Cloudflare Images for dynamic transformations
-Optional Cloudflare Stream for video playback
+Cloudflare R2  → main store for NEW property image uploads
+Supabase Storage ("property-images") → legacy fallback for existing images
+Supabase/Postgres → metadata source of truth (property_images table)
 ```
 
-Media abstraction should be introduced before major migration:
+New uploads go to Cloudflare R2 via presigned PUT URLs (S3-compatible, AWS SDK
+v3). Existing rows remain on Supabase Storage and keep working unchanged — old
+files are NOT migrated in this sprint. Each `property_images` row records where
+its bytes live via `storage_provider` (`'supabase' | 'cloudflare_r2'`):
+
+- R2 rows store `original_key` (+ future `thumbnail_key` / `preview_key`) and
+  mirror `original_key` into `storage_path` once finalized for backward compat.
+- Supabase rows keep their original `storage_path`.
+
+Future (later sprints): Cloudflare Images transforms, Cloudflare Stream video.
+Not implemented here.
+
+### Storage abstraction — use it for ALL media operations
+
+`src/lib/storage/property-media.ts` is the single, provider-aware entry point.
+Do NOT call `supabase.storage` or the R2 client directly from pages/components.
 
 ```text
-upload image
-delete image
-create signed URL
-create thumbnail URL
-download/open image
+createPropertyImageUploadTarget(params) → presigned R2 PUT URL + key
+createR2SignedReadUrl(key) / createR2SignedReadUrls(keys) → presigned GET URLs
+deleteR2Object(key)
+getPropertyImageSignedUrl(image, supabase) → one URL, either provider
+getPropertyImageSignedUrls(images, supabase) → Map<imageId,url>, batched per provider
 ```
 
-Avoid hardcoding storage provider logic across many pages.
+`getPropertyImageSignedUrls` splits the list by provider: legacy Supabase rows
+are signed in a single `createSignedUrls()` call; R2 rows are signed locally.
+Always batch — never sign per-image in a loop.
+
+### Security / credentials
+
+- R2 credentials are **server-only**. The browser only ever receives short-lived
+  presigned URLs. Never expose `CLOUDFLARE_R2_SECRET_ACCESS_KEY` to the client
+  and never import `property-media.ts` from a client component.
+- The bucket stays private — access is always via presigned URLs, never public.
+- All property/image queries are scoped by `user_id`; upload signing requires a
+  verified property-ownership check first.
+
+Required server env vars (set in `.env.local`, never committed):
+
+```text
+CLOUDFLARE_R2_ACCOUNT_ID
+CLOUDFLARE_R2_ACCESS_KEY_ID
+CLOUDFLARE_R2_SECRET_ACCESS_KEY
+CLOUDFLARE_R2_BUCKET_NAME
+CLOUDFLARE_R2_ENDPOINT   # optional — derived from account id if omitted
+```
+
+Missing config produces a clear `StorageConfigError` listing the absent vars.
+
+### R2 CORS requirement
+
+Browsers upload bytes directly to R2 via the presigned PUT URL, so the R2
+bucket **must** allow CORS for each app origin (e.g. `http://localhost:3000`
+in dev and the production origin). Allow method `PUT`, header `Content-Type`,
+and `GET`/`HEAD` for reads. If CORS is misconfigured the browser PUT fails and
+the upload form surfaces a friendly message telling the developer to fix the
+bucket CORS rules — it does not crash.
 
 ## Performance Priorities
 

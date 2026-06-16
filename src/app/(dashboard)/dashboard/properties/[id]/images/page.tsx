@@ -3,6 +3,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  getPropertyImageSignedUrls,
+  R2_PENDING_PATH,
+} from "@/lib/storage/property-media";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,10 +14,6 @@ import { ImageUploadForm } from "./image-upload-form";
 import { ImageCard } from "./image-card";
 
 export const metadata: Metadata = { title: "Hình ảnh căn nhà" };
-
-const BUCKET = "property-images";
-/** Signed URL TTL — 1 hour is enough for a browse session. */
-const SIGNED_URL_TTL = 3600;
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -37,40 +37,32 @@ export default async function PropertyImagesPage({ params }: Props) {
 
   if (!property) notFound();
 
-  // Fetch images ordered: cover first, then by sort_order, then created_at
+  // Fetch images ordered: cover first, then by sort_order, then created_at.
+  // Exclude not-yet-finalized rows from either provider.
   const { data: images, error } = await supabase
     .from("property_images")
     .select(
-      "id, storage_path, file_name, mime_type, size_bytes, alt_text, caption, sort_order, is_cover, created_at"
+      "id, storage_path, file_name, mime_type, size_bytes, alt_text, caption, sort_order, is_cover, created_at, storage_provider, original_key, thumbnail_key, preview_key"
     )
     .eq("property_id", id)
     .eq("user_id", user.id)
+    .neq("storage_path", "__pending__")
+    .neq("storage_path", R2_PENDING_PATH)
     .order("is_cover", { ascending: false })
     .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
 
-  // Generate signed URLs for all images in one batch call
+  // Generate signed URLs for all images — batched per provider by the abstraction.
   type ImageRow = NonNullable<typeof images>[number];
   type ImageWithUrl = ImageRow & { signedUrl: string };
 
   let imagesWithUrls: ImageWithUrl[] = [];
 
   if (images && images.length > 0) {
-    const paths = images.map((img) => img.storage_path);
-    const { data: signedData } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrls(paths, SIGNED_URL_TTL);
-
-    const urlMap = new Map<string, string>();
-    for (const item of signedData ?? []) {
-      if (item.path && item.signedUrl) {
-        urlMap.set(item.path, item.signedUrl);
-      }
-    }
-
+    const urlById = await getPropertyImageSignedUrls(images, supabase);
     imagesWithUrls = images.map((img) => ({
       ...img,
-      signedUrl: urlMap.get(img.storage_path) ?? "",
+      signedUrl: urlById.get(img.id) ?? "",
     }));
   }
 

@@ -156,11 +156,15 @@ export interface GeneratedContent {
 
 // --- Property Images ------------------------------------------------------
 
+/** Where a property image's bytes live. New uploads use Cloudflare R2; legacy
+ *  rows remain on Supabase Storage. See src/lib/storage/property-media.ts. */
+export type StorageProvider = "supabase" | "cloudflare_r2";
+
 export interface PropertyImage {
   id: string;
   user_id: string;          // FK → auth.users.id (set server-side only)
   property_id: string;      // FK → properties.id
-  storage_path: string;     // path inside the private bucket, never a public URL
+  storage_path: string;     // legacy Supabase path / mirror of original_key for R2 rows
   file_name: string | null;
   mime_type: string | null;
   size_bytes: number | null;
@@ -171,6 +175,15 @@ export interface PropertyImage {
   sort_order: number;       // default 0
   is_cover: boolean;        // default false
   created_at: string;
+
+  // --- Storage provider (added 20240108000001) ---------------------------
+  storage_provider: StorageProvider;   // default 'supabase'
+  original_key: string | null;         // R2 object key for the full-size image
+  thumbnail_key: string | null;        // R2 object key for the thumbnail (future)
+  preview_key: string | null;          // R2 object key for the preview (future)
+  original_mime_type: string | null;
+  original_size_bytes: number | null;
+  thumbnail_size_bytes: number | null;
 }
 
 // --- Content Style Profiles (Văn phong riêng) ----------------------------
