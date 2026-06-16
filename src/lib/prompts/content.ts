@@ -2,7 +2,13 @@
 // Prompt templates (Vietnamese) — plain strings, easy to iterate.
 // ---------------------------------------------------------------------------
 
-import type { ContentPlatform, ContentTone, ContentType, Property } from "@/types";
+import type {
+  ContentPlatform,
+  ContentStyleRules,
+  ContentTone,
+  ContentType,
+  Property,
+} from "@/types";
 import { formatVND } from "@/utils";
 
 // Keep for backwards compat / ad-hoc use
@@ -43,7 +49,72 @@ export type GenerateOptions = {
   platform: ContentPlatform;
   tone: ContentTone;
   contentType: ContentType;
+  /** Optional saved writing-style rules to apply. Omit/null = default 1nha voice. */
+  styleRules?: ContentStyleRules | null;
 };
+
+// ---------------------------------------------------------------------------
+// Style-rules serializer
+//
+// style_rules is jsonb, so values may be partial or malformed — read every
+// field defensively and skip anything missing/empty rather than trusting the
+// ContentStyleRules type. Returns null when nothing usable is present.
+// ---------------------------------------------------------------------------
+function asText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function asList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter((v) => v.length > 0);
+}
+
+export function buildStyleRulesSection(
+  styleRules: ContentStyleRules | null | undefined
+): string | null {
+  if (!styleRules || typeof styleRules !== "object") return null;
+
+  const r = styleRules as unknown as Record<string, unknown>;
+  const lines: string[] = [];
+
+  const field = (label: string, key: string) => {
+    const text = asText(r[key]);
+    if (text) lines.push(`- ${label}: ${text}`);
+  };
+  const listField = (label: string, key: string) => {
+    const items = asList(r[key]);
+    if (items.length) lines.push(`- ${label}: ${items.join("; ")}`);
+  };
+
+  field("Tóm tắt văn phong", "summary");
+  field("Giọng văn", "tone");
+  field("Độ dài", "length");
+  field("Cấu trúc", "structure");
+  field("Định dạng / cách trình bày", "formatting");
+  field("Cách dùng emoji", "emoji_usage");
+  field("Cách mở đầu", "opening_style");
+  field("Cách kêu gọi hành động (CTA)", "cta_style");
+  listField("Cụm từ / mẫu câu hay dùng", "phrase_patterns");
+  listField("Cần tránh", "avoid");
+  field("Hướng dẫn bổ sung", "generation_instructions");
+
+  if (lines.length === 0) return null;
+
+  return [
+    "=== VĂN PHONG CẦN ÁP DỤNG ===",
+    "Hãy viết theo style profile dưới đây.",
+    "Chỉ học giọng văn, cấu trúc, cách xuống dòng, cách CTA, cách dùng emoji và nhịp trình bày.",
+    "Không sao chép nguyên văn câu chữ từ bài mẫu.",
+    "Không bịa thông tin không có trong dữ liệu căn.",
+    "Nếu dữ liệu căn thiếu pháp lý, hướng, số tầng, mặt tiền, ngõ, quy hoạch, số nhà, thông tin chủ nhà thì không được tự thêm.",
+    "",
+    ...lines,
+  ].join("\n");
+}
 
 /**
  * Build the full user-facing prompt from a property + generation options.
@@ -103,6 +174,8 @@ export function buildPropertyPrompt(
   if (property.weaknesses) extras.push(`Lưu ý: ${property.weaknesses}`);
   if (property.owner_note) extras.push(`Ghi chú chủ nhà: ${property.owner_note}`);
 
+  const styleSection = buildStyleRulesSection(options.styleRules);
+
   return [
     `Tạo ${TYPE_LABELS[options.contentType]} cho bất động sản sau.`,
     `Nền tảng: ${PLATFORM_LABELS[options.platform]}.`,
@@ -114,6 +187,7 @@ export function buildPropertyPrompt(
     `Vị trí: ${location}`,
     `Thông số: ${specs}`,
     ...(extras.length ? ["", ...extras] : []),
+    ...(styleSection ? ["", styleSection] : []),
     "",
     "=== YÊU CẦU ===",
     `Viết bằng tiếng Việt. Không dùng thông tin bị thiếu (để trống nếu không có).`,

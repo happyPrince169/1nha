@@ -93,17 +93,31 @@ export default async function ContentOutputPage({ params }: Props) {
     post_url: string | null;
     channel_name: string | null;
     notes: string | null;
+    style_profile_id: string | null;
   };
 
   const { data: content, error } = await supabase
     .from("generated_contents")
-    .select("id,platform,tone,content_type,content,created_at,updated_at,edited_at,property_id,status,copied_at,scheduled_at,posted_at,post_url,channel_name,notes")
+    .select("id,platform,tone,content_type,content,created_at,updated_at,edited_at,property_id,status,copied_at,scheduled_at,posted_at,post_url,channel_name,notes,style_profile_id")
     .eq("id", contentId)
     .eq("user_id", user.id)
     .eq("property_id", id)
     .single() as unknown as { data: ContentRow | null; error: unknown };
 
   if (error || !content) notFound();
+
+  // Resolve the style-profile name for display (scoped to user). Best-effort:
+  // a deleted profile or null id simply shows nothing.
+  let styleProfileName: string | null = null;
+  if (content.style_profile_id) {
+    const { data: profile } = await supabase
+      .from("content_style_profiles")
+      .select("name")
+      .eq("id", content.style_profile_id)
+      .eq("user_id", user.id)
+      .single();
+    styleProfileName = (profile?.name as string | null) ?? null;
+  }
 
   // Fetch property for the header and content workspace link
   const { data: property } = await supabase
@@ -155,6 +169,13 @@ export default async function ContentOutputPage({ params }: Props) {
         )}
         <ContentStatusBadge status={status} className="ml-auto" />
       </div>
+
+      {/* Style profile used */}
+      {styleProfileName && (
+        <p className="text-xs text-muted-foreground">
+          Văn phong: {styleProfileName}
+        </p>
+      )}
 
       {/* Posted info banner */}
       {status === "posted" && (

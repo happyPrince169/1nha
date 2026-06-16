@@ -6,7 +6,12 @@ import { createClient } from "@/lib/supabase/server";
 import { generateContent } from "@/lib/ai";
 import { buildPropertyPrompt } from "@/lib/prompts/content";
 import { trackEvent } from "@/lib/usage";
-import type { ContentPlatform, ContentTone, ContentType } from "@/types";
+import type {
+  ContentPlatform,
+  ContentStyleRules,
+  ContentTone,
+  ContentType,
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,6 +72,29 @@ export async function generatePropertyContent(
   if (!tone) return { error: "Vui lòng chọn giọng văn." };
   if (!content_type) return { error: "Vui lòng chọn loại content." };
 
+  // --- resolve optional style profile (scoped to authenticated user) -------
+  const styleProfileIdRaw = formData.get("style_profile_id");
+  const styleProfileId =
+    typeof styleProfileIdRaw === "string" && styleProfileIdRaw.trim().length > 0
+      ? styleProfileIdRaw.trim()
+      : null;
+
+  let styleRules: ContentStyleRules | null = null;
+  if (styleProfileId) {
+    const { data: profile, error: profileError } = await supabase
+      .from("content_style_profiles")
+      .select("id,style_rules")
+      .eq("id", styleProfileId)
+      .eq("user_id", user.id) // never allow another user's profile
+      .single();
+
+    if (profileError || !profile) {
+      return { error: "Không tìm thấy văn phong đã chọn." };
+    }
+
+    styleRules = (profile.style_rules as ContentStyleRules | null) ?? null;
+  }
+
   // --- fetch property (scoped to authenticated user) -----------------------
   const { data: property, error: propError } = await supabase
     .from("properties")
@@ -86,6 +114,7 @@ export async function generatePropertyContent(
     platform,
     tone,
     contentType: content_type,
+    styleRules, // null = default 1nha voice (behaviour unchanged)
   });
 
   let generatedText: string;
@@ -112,6 +141,7 @@ export async function generatePropertyContent(
       content_type,
       prompt_used: prompt,
       content: generatedText,
+      style_profile_id: styleProfileId, // null when using default 1nha voice
     })
     .select("id")
     .single();
@@ -126,6 +156,15 @@ export async function generatePropertyContent(
     platform,
     content_type,
   });
+
+  if (styleProfileId) {
+    await trackEvent(supabase, user.id, "style_profile_used", {
+      property_id: propertyId,
+      style_profile_id: styleProfileId,
+      platform,
+      content_type,
+    });
+  }
 
   // --- redirect to output view ---------------------------------------------
   redirect(`/dashboard/properties/${propertyId}/content/${saved.id}`);

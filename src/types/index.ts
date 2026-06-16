@@ -151,6 +151,7 @@ export interface GeneratedContent {
   parent_content_id: string | null;
   updated_at: string | null;
   edited_at: string | null;   // set only on broker manual edits, not AI generation
+  style_profile_id: string | null; // FK → content_style_profiles.id, null = default 1nha voice
 }
 
 // --- Property Images ------------------------------------------------------

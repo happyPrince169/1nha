@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
 import { generatePropertyContent } from "./actions";
-import { GenerateForm } from "./generate-form";
+import { GenerateForm, type StyleProfileOption } from "./generate-form";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +34,25 @@ export default async function GeneratePage({ params }: Props) {
 
   if (!property) notFound();
 
+  // Saved writing-style profiles for this user. Scoped by user_id; default
+  // first, then most recent. style_rules is selected but not shipped to the
+  // client form — the action re-fetches it server-side when generating.
+  const { data: styleProfiles } = await supabase
+    .from("content_style_profiles")
+    .select("id,name,platform,is_default,style_rules")
+    .eq("user_id", user.id)
+    .order("is_default", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  const profileOptions: StyleProfileOption[] = (styleProfiles ?? []).map(
+    (p) => ({
+      id: p.id as string,
+      name: p.name as string,
+      platform: (p.platform as string | null) ?? null,
+      is_default: Boolean(p.is_default),
+    })
+  );
+
   // Bind the property id into the action server-side.
   const boundAction = generatePropertyContent.bind(null, id);
 
@@ -54,7 +73,7 @@ export default async function GeneratePage({ params }: Props) {
         </Link>
       </div>
 
-      <GenerateForm action={boundAction} />
+      <GenerateForm action={boundAction} profiles={profileOptions} />
     </div>
   );
 }

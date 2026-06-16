@@ -34,22 +34,61 @@ const CONTENT_TYPES = [
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
+/** Minimal style-profile shape needed by the form (no style_rules client-side). */
+export type StyleProfileOption = {
+  id: string;
+  name: string;
+  platform: string | null;
+  is_default: boolean;
+};
+
 type Props = {
   /** Server-bound action — id already baked in, never passed through the form */
   action: (
     prevState: GenerateContentState,
     formData: FormData
   ) => Promise<GenerateContentState>;
+  /** Saved writing-style profiles for the current user (default first). */
+  profiles: StyleProfileOption[];
 };
 
 const initialState: GenerateContentState = { error: null };
 
-export function GenerateForm({ action }: Props) {
+export function GenerateForm({ action, profiles }: Props) {
   const [state, formAction, isPending] = useActionState(action, initialState);
+
+  // Preselect the default profile if the user has one; otherwise the 1nha voice.
+  const defaultProfile = profiles.find((p) => p.is_default);
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
       {state.error && <FormError>{state.error}</FormError>}
+
+      {/* Writing-style profile */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Văn phong</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          <select
+            name="style_profile_id"
+            defaultValue={defaultProfile?.id ?? ""}
+            disabled={isPending}
+            className="h-11 w-full rounded-md border border-border bg-background px-3 text-sm focus:border-foreground focus:outline-none disabled:opacity-50"
+          >
+            <option value="">Mặc định 1nha</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.is_default ? " (mặc định)" : ""}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            Chọn văn phong đã học để bài viết giống cách bạn thường đăng hơn.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Platform */}
       <Card>
