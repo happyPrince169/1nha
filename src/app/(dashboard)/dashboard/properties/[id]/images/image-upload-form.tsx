@@ -5,14 +5,17 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
+import { createMainAndThumbnailImages } from "@/lib/images/client-image-processing";
 import {
-  requestPropertyImageUpload,
+  requestProcessedPropertyImageUpload,
   finalizePropertyImageUpload,
 } from "./actions";
 
 const ACCEPTED = "image/jpeg,image/png,image/webp";
 const ALLOWED = ["image/jpeg", "image/png", "image/webp"];
-const MAX_MB = 2;
+// Raw selection limit — the browser resizes/compresses down to a social-ready
+// main image + small thumbnail before anything is uploaded.
+const MAX_MB = 20;
 const MAX_BYTES = MAX_MB * 1024 * 1024;
 
 type Props = { propertyId: string };
@@ -38,6 +41,7 @@ function UploadFormInner({
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     setError(null);
@@ -67,6 +71,11 @@ function UploadFormInner({
     setPreview(URL.createObjectURL(picked));
   }
 
+  // A friendly CORS/network error shared by both direct-to-R2 PUTs.
+  const CORS_ERROR =
+    "Không tải được ảnh lên R2. Nhiều khả năng bucket chưa cho phép CORS từ địa chỉ hiện tại. " +
+    "Hãy thêm origin này vào cấu hình CORS của bucket R2 rồi thử lại.";
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!file || isPending) return;
@@ -75,54 +84,107 @@ function UploadFormInner({
     setIsPending(true);
 
     try {
-      // 1. Ask the server for a presigned R2 upload target.
-      const req = await requestPropertyImageUpload(propertyId, {
-        fileName: file.name,
-        mimeType: file.type,
-        sizeBytes: file.size,
+      // 1. Resize/compress on the client → social-ready main + small thumbnail.
+      setStatusMsg("Đang xử lý ảnh…");
+      let processed;
+      try {
+        processed = await createMainAndThumbnailImages(file);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Không xử lý được ảnh. Vui lòng thử ảnh khác."
+        );
+        setStatusMsg(null);
+        setIsPending(false);
+        return;
+      }
+      const { main, thumbnail } = processed;
+
+      // 2. Ask the server for presigned R2 upload targets for both files.
+      const req = await requestProcessedPropertyImageUpload(propertyId, {
+        fileName: main.file.name,
+        width: main.width,
+        height: main.height,
+        original: { mimeType: main.mimeType, sizeBytes: main.sizeBytes },
+        thumbnail: {
+          mimeType: thumbnail.mimeType,
+          sizeBytes: thumbnail.sizeBytes,
+        },
       });
       if (!req.ok) {
         setError(req.error);
+        setStatusMsg(null);
         setIsPending(false);
         return;
       }
 
-      // 2. Upload bytes straight to R2. A thrown error here is almost always a
-      //    CORS/network failure (the bucket must allow this origin).
-      let putRes: Response;
+      // 3. Upload the main image straight to R2. A thrown error here is almost
+      //    always a CORS/network failure (the bucket must allow this origin).
+      setStatusMsg("Đang tải ảnh lên…");
+      let mainRes: Response;
       try {
-        putRes = await fetch(req.uploadUrl, {
+        mainRes = await fetch(req.originalUploadUrl, {
           method: "PUT",
-          body: file,
-          headers: { "Content-Type": req.contentType },
+          body: main.file,
+          headers: { "Content-Type": req.originalContentType },
         });
       } catch {
-        setError(
-          "Không tải được ảnh lên R2. Nhiều khả năng bucket chưa cho phép CORS từ địa chỉ hiện tại. " +
-            "Hãy thêm origin này vào cấu hình CORS của bucket R2 rồi thử lại."
-        );
+        setError(CORS_ERROR);
+        setStatusMsg(null);
         setIsPending(false);
         return;
       }
-      if (!putRes.ok) {
-        setError(`Tải ảnh lên R2 thất bại (mã ${putRes.status}). Vui lòng thử lại.`);
+      if (!mainRes.ok) {
+        setError(
+          `Tải ảnh lên R2 thất bại (mã ${mainRes.status}). Vui lòng thử lại.`
+        );
+        setStatusMsg(null);
         setIsPending(false);
         return;
       }
 
-      // 3. Mark the row ready.
+      // 4. Upload the thumbnail. If this fails after the main upload, we leave
+      //    the row pending (not finalized) so it stays hidden from the UI —
+      //    no broken image is ever shown.
+      let thumbRes: Response;
+      try {
+        thumbRes = await fetch(req.thumbnailUploadUrl, {
+          method: "PUT",
+          body: thumbnail.file,
+          headers: { "Content-Type": req.thumbnailContentType },
+        });
+      } catch {
+        setError(CORS_ERROR);
+        setStatusMsg(null);
+        setIsPending(false);
+        return;
+      }
+      if (!thumbRes.ok) {
+        setError(
+          `Tải ảnh thu nhỏ lên R2 thất bại (mã ${thumbRes.status}). Vui lòng thử lại.`
+        );
+        setStatusMsg(null);
+        setIsPending(false);
+        return;
+      }
+
+      // 5. Mark the row ready.
       const fin = await finalizePropertyImageUpload(propertyId, req.imageId);
       if (!fin.ok) {
         setError(fin.error);
+        setStatusMsg(null);
         setIsPending(false);
         return;
       }
 
       // Success — refresh server data, then remount this form fresh.
+      setStatusMsg("Hoàn tất");
       router.refresh();
       onSuccess();
     } catch {
       setError("Lỗi không xác định khi tải ảnh lên. Vui lòng thử lại.");
+      setStatusMsg(null);
       setIsPending(false);
     }
   }
@@ -164,6 +226,9 @@ function UploadFormInner({
             </span>
             <p className="text-sm font-medium">Nhấn để chọn ảnh</p>
             <p className="text-xs">JPEG · PNG · WebP · tối đa {MAX_MB} MB</p>
+            <p className="text-[11px]">
+              Ảnh được tối ưu ngay trên máy trước khi tải lên.
+            </p>
           </div>
         )}
       </div>
@@ -195,8 +260,17 @@ function UploadFormInner({
       )}
 
       <Button type="submit" className="w-full" disabled={isPending || !file}>
-        {isPending ? "Đang tải lên…" : "Tải ảnh lên"}
+        {isPending ? (statusMsg ?? "Đang tải lên…") : "Tải ảnh lên"}
       </Button>
+
+      {isPending && statusMsg && (
+        <p
+          className="text-center text-xs text-muted-foreground"
+          aria-live="polite"
+        >
+          {statusMsg}
+        </p>
+      )}
     </form>
   );
 }

@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server";
 import { trackEvent } from "@/lib/usage";
 import {
   createPropertyImageUploadTarget,
+  createPropertyImageUploadTargetsForProcessedImages,
   deleteR2Object,
   R2_PENDING_PATH,
   StorageConfigError,
@@ -344,6 +345,141 @@ export async function requestPropertyImageUpload(
       originalKey: target.originalKey,
       contentType: mimeType,
       expiresIn: target.expiresIn,
+    };
+  } catch (err) {
+    if (err instanceof ActionError) return { ok: false, error: err.message };
+    return { ok: false, error: "Lỗi không xác định. Vui lòng thử lại." };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// requestProcessedPropertyImageUpload  (Cloudflare R2 — processed, step 1 of 2)
+//
+// The browser has already resized/compressed the photo into a social-ready
+// "main" image and a small "thumbnail". This validates ownership + the
+// processed file metadata, presigns a PUT URL for each, and inserts a pending
+// metadata row carrying both R2 keys + size/dimension fields. The browser then
+// PUTs both files directly to R2 and calls finalizePropertyImageUpload.
+//
+// Bytes never pass through this Server Action — only metadata + presigned URLs.
+// ---------------------------------------------------------------------------
+export type ProcessedImageMeta = {
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export type RequestProcessedUploadInput = {
+  fileName: string;
+  /** Dimensions of the processed MAIN image (stored on the row). */
+  width: number;
+  height: number;
+  original: ProcessedImageMeta;
+  thumbnail: ProcessedImageMeta;
+};
+
+export type RequestProcessedUploadResult =
+  | {
+      ok: true;
+      imageId: string;
+      originalUploadUrl: string;
+      thumbnailUploadUrl: string;
+      originalKey: string;
+      thumbnailKey: string;
+      /** Echoed so the browser PUTs with the exact signed Content-Type. */
+      originalContentType: string;
+      thumbnailContentType: string;
+      expiresIn: number;
+    }
+  | { ok: false; error: string };
+
+export async function requestProcessedPropertyImageUpload(
+  propertyId: string,
+  input: RequestProcessedUploadInput
+): Promise<RequestProcessedUploadResult> {
+  try {
+    const { supabase, user } = await requireUser();
+    await requirePropertyOwnership(supabase, propertyId, user.id);
+
+    const { fileName, width, height, original, thumbnail } = input;
+
+    // Basic shape validation (the storage layer re-checks MIME + size limits).
+    for (const part of [original, thumbnail]) {
+      if (!ALLOWED_MIME_TYPES.has(part.mimeType)) {
+        return {
+          ok: false,
+          error: "Định dạng không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP.",
+        };
+      }
+      if (!Number.isFinite(part.sizeBytes) || part.sizeBytes <= 0) {
+        return { ok: false, error: "Tệp ảnh không hợp lệ." };
+      }
+    }
+    if (
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      return { ok: false, error: "Kích thước ảnh không hợp lệ." };
+    }
+
+    // Generate the id first so the R2 keys are stable and we can presign before
+    // touching the database — a config/validation failure leaves no orphan row.
+    const imageId = randomUUID();
+
+    let targets;
+    try {
+      targets = await createPropertyImageUploadTargetsForProcessedImages({
+        userId: user.id,
+        propertyId,
+        imageId,
+        original,
+        thumbnail,
+      });
+    } catch (err) {
+      if (
+        err instanceof StorageConfigError ||
+        err instanceof StorageValidationError
+      ) {
+        return { ok: false, error: err.message };
+      }
+      return { ok: false, error: "Không thể tạo liên kết tải lên R2." };
+    }
+
+    const { error: insertError } = await supabase
+      .from("property_images")
+      .insert({
+        id: imageId,
+        user_id: user.id,
+        property_id: propertyId,
+        storage_provider: "cloudflare_r2",
+        storage_path: R2_PENDING_PATH, // replaced with original_key on finalize
+        original_key: targets.originalKey,
+        thumbnail_key: targets.thumbnailKey,
+        file_name: fileName,
+        mime_type: original.mimeType,
+        size_bytes: original.sizeBytes,
+        original_mime_type: original.mimeType,
+        original_size_bytes: original.sizeBytes,
+        thumbnail_size_bytes: thumbnail.sizeBytes,
+        width,
+        height,
+      });
+
+    if (insertError) {
+      return { ok: false, error: insertError.message };
+    }
+
+    return {
+      ok: true,
+      imageId,
+      originalUploadUrl: targets.originalUploadUrl,
+      thumbnailUploadUrl: targets.thumbnailUploadUrl,
+      originalKey: targets.originalKey,
+      thumbnailKey: targets.thumbnailKey,
+      originalContentType: targets.originalContentType,
+      thumbnailContentType: targets.thumbnailContentType,
+      expiresIn: targets.expiresIn,
     };
   } catch (err) {
     if (err instanceof ActionError) return { ok: false, error: err.message };

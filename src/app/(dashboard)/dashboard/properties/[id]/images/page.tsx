@@ -59,7 +59,11 @@ export default async function PropertyImagesPage({ params }: Props) {
   let imagesWithUrls: ImageWithUrl[] = [];
 
   if (images && images.length > 0) {
-    const urlById = await getPropertyImageSignedUrls(images, supabase);
+    // Gallery grid is a preview surface — prefer thumbnails for fast loading.
+    // Falls back to preview_key → original_key (and legacy Supabase paths).
+    const urlById = await getPropertyImageSignedUrls(images, supabase, {
+      variant: "thumbnail",
+    });
     imagesWithUrls = images.map((img) => ({
       ...img,
       signedUrl: urlById.get(img.id) ?? "",

@@ -226,7 +226,7 @@ Warnings:
 Căn này đã lâu chưa cập nhật. Hãy kiểm tra lại giá/trạng thái trước khi đăng.
 ```
 
-### 3. Image Performance Optimization
+### 3. Image Performance Optimization — 🟢 DONE
 
 Goal:
 
@@ -234,15 +234,22 @@ Goal:
 Improve app responsiveness when working with images.
 ```
 
-Tasks:
+Done:
 
 ```text
-- Client-side resize/compress before upload.
-- Avoid sending large files through Server Actions.
-- Create thumbnails.
-- Use thumbnails in property list and image grids.
-- Batch signed URLs.
-- Consider storage abstraction.
+- Client-side resize/compress before upload (src/lib/images/client-image-processing.ts).
+- Large files no longer routed through Server Actions (direct PUT to R2).
+- Real client-generated thumbnails (480px) + social-ready main image (2048px).
+- Thumbnails used in property list, gallery grid, and property detail preview.
+- Original images used for Post Assistant open/download/copy/posting.
+- Batched signed URLs per provider via getPropertyImageSignedUrls().
+- Storage abstraction in src/lib/storage/property-media.ts.
+```
+
+Follow-up (later):
+
+```text
+- Lazy-load / progressive loading polish.
 ```
 
 ### 4. PWA
@@ -291,17 +298,19 @@ Done (this sprint):
 - property_images gains storage_provider + R2 key columns (migration 20240108000001)
 - All image surfaces (gallery, property detail, property list, post assistant)
   read both R2 and legacy Supabase rows via getPropertyImageSignedUrls()
-- Provider-aware delete; legacy Supabase Storage retained as fallback
+- Provider-aware delete (original_key + thumbnail_key + preview_key); legacy
+  Supabase Storage retained as fallback
+- Client-side resize/compress: social-ready main image (2048px) → original_key,
+  thumbnail (480px) → thumbnail_key, both uploaded direct to R2 (presigned PUTs)
 ```
 
 Follow-up tasks:
 
 ```text
-- Migrate existing Supabase Storage images to R2 (backfill original_key, flip provider)
-- Generate thumbnails/previews client-side (resize/compress) and upload thumb + original
-  → populate thumbnail_key / preview_key (schema already in place)
-- Add video media support (Cloudflare Stream) via the same abstraction
-- Consider Cloudflare Images for on-the-fly transforms
+- Migrate existing Supabase Storage images to R2 (backfill original_key/thumbnail_key, flip provider)
+- Optional: store the raw camera original separately only if a real need appears
+- Add video media support (Cloudflare Stream) via the same abstraction — later
+- Optional Cloudflare Images for on-the-fly transforms — only if needed later
 ```
 
 ### 2. Viewing Records

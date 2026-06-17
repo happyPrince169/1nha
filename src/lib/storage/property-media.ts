@@ -42,6 +42,11 @@ export const R2_PENDING_PATH = "__r2_pending__";
 /** Allowed image MIME types for new uploads. */
 const ALLOWED_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 
+/** Max accepted size for a client-processed main (social-ready) image. */
+export const MAX_PROCESSED_ORIGINAL_BYTES = 4 * 1024 * 1024; // 4 MB
+/** Max accepted size for a client-processed thumbnail image. */
+export const MAX_PROCESSED_THUMBNAIL_BYTES = 700 * 1024; // 700 KB
+
 // ---------------------------------------------------------------------------
 // Errors — distinguishable so callers can surface dev-friendly messages
 // ---------------------------------------------------------------------------
@@ -157,6 +162,18 @@ export function buildOriginalKey(
   )}`;
 }
 
+/** Canonical R2 object key for the in-app thumbnail of an image. */
+export function buildThumbnailKey(
+  userId: string,
+  propertyId: string,
+  imageId: string,
+  mimeType: string
+): string {
+  return `users/${userId}/properties/${propertyId}/images/${imageId}/thumb.${extForMime(
+    mimeType
+  )}`;
+}
+
 // ---------------------------------------------------------------------------
 // 1. createPropertyImageUploadTarget — presigned PUT for a new R2 upload
 // ---------------------------------------------------------------------------
@@ -207,6 +224,120 @@ export async function createPropertyImageUploadTarget(
     provider: "cloudflare_r2",
     originalKey,
     uploadUrl,
+    expiresIn: UPLOAD_URL_TTL,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 1b. createPropertyImageUploadTargetsForProcessedImages
+//
+// The browser pre-processes a photo into a high-quality social-ready "main"
+// image (→ original_key) and a small "thumbnail" (→ thumbnail_key), then PUTs
+// both directly to R2. This presigns both PUT URLs and validates the processed
+// MIME types + sizes. Bytes never pass through the server.
+// ---------------------------------------------------------------------------
+export type ProcessedImagePart = {
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export type CreateProcessedUploadTargetsParams = {
+  userId: string;
+  propertyId: string;
+  imageId: string;
+  original: ProcessedImagePart;
+  thumbnail: ProcessedImagePart;
+};
+
+export type ProcessedUploadTargets = {
+  provider: "cloudflare_r2";
+  originalKey: string;
+  thumbnailKey: string;
+  originalUploadUrl: string;
+  thumbnailUploadUrl: string;
+  originalContentType: string;
+  thumbnailContentType: string;
+  expiresIn: number;
+};
+
+function validateProcessedPart(
+  part: ProcessedImagePart,
+  maxBytes: number,
+  label: string
+): void {
+  if (!ALLOWED_IMAGE_MIME.has(part.mimeType)) {
+    throw new StorageValidationError(
+      "Định dạng không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP."
+    );
+  }
+  if (!Number.isFinite(part.sizeBytes) || part.sizeBytes <= 0) {
+    throw new StorageValidationError(`Tệp ${label} không hợp lệ.`);
+  }
+  if (part.sizeBytes > maxBytes) {
+    throw new StorageValidationError(
+      "Ảnh sau khi xử lý vẫn quá lớn. Vui lòng chọn ảnh khác."
+    );
+  }
+}
+
+export async function createPropertyImageUploadTargetsForProcessedImages(
+  params: CreateProcessedUploadTargetsParams
+): Promise<ProcessedUploadTargets> {
+  validateProcessedPart(
+    params.original,
+    MAX_PROCESSED_ORIGINAL_BYTES,
+    "ảnh chính"
+  );
+  validateProcessedPart(
+    params.thumbnail,
+    MAX_PROCESSED_THUMBNAIL_BYTES,
+    "ảnh thu nhỏ"
+  );
+
+  const { client, bucket } = getR2();
+
+  const originalKey = buildOriginalKey(
+    params.userId,
+    params.propertyId,
+    params.imageId,
+    params.original.mimeType
+  );
+  const thumbnailKey = buildThumbnailKey(
+    params.userId,
+    params.propertyId,
+    params.imageId,
+    params.thumbnail.mimeType
+  );
+
+  const [originalUploadUrl, thumbnailUploadUrl] = await Promise.all([
+    getSignedUrl(
+      client,
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: originalKey,
+        ContentType: params.original.mimeType,
+      }),
+      { expiresIn: UPLOAD_URL_TTL }
+    ),
+    getSignedUrl(
+      client,
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: thumbnailKey,
+        ContentType: params.thumbnail.mimeType,
+      }),
+      { expiresIn: UPLOAD_URL_TTL }
+    ),
+  ]);
+
+  return {
+    provider: "cloudflare_r2",
+    originalKey,
+    thumbnailKey,
+    originalUploadUrl,
+    thumbnailUploadUrl,
+    originalContentType: params.original.mimeType,
+    thumbnailContentType: params.thumbnail.mimeType,
     expiresIn: UPLOAD_URL_TTL,
   };
 }

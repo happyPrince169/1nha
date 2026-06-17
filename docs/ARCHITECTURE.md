@@ -278,12 +278,41 @@ v3). Existing rows remain on Supabase Storage and keep working unchanged — old
 files are NOT migrated in this sprint. Each `property_images` row records where
 its bytes live via `storage_provider` (`'supabase' | 'cloudflare_r2'`):
 
-- R2 rows store `original_key` (+ future `thumbnail_key` / `preview_key`) and
-  mirror `original_key` into `storage_path` once finalized for backward compat.
+- R2 rows store `original_key` + `thumbnail_key` (`preview_key` reserved for
+  later) and mirror `original_key` into `storage_path` once finalized for
+  backward compat.
 - Supabase rows keep their original `storage_path`.
 
 Future (later sprints): Cloudflare Images transforms, Cloudflare Stream video.
 Not implemented here.
+
+### Client-side image processing (new uploads)
+
+New property image uploads are processed **in the browser** before any bytes
+leave the device (`src/lib/images/client-image-processing.ts`, client-only).
+From a single selected photo the browser produces two JPEGs and uploads both
+directly to R2 via separate presigned PUT URLs:
+
+```text
+Main (social-ready) image  → original_key
+  - max long edge 2048px, quality 0.86, JPEG
+  - used for open / download / copy / social posting
+  - NOT a tiny thumbnail — brokers post this to Facebook/Zalo/TikTok
+
+Thumbnail image            → thumbnail_key
+  - max long edge 480px, quality 0.72, JPEG
+  - used only for fast in-app previews (property list, gallery, detail)
+```
+
+Flow: select file → `createMainAndThumbnailImages(file)` →
+`requestProcessedPropertyImageUpload` (presigns both PUTs, inserts a pending
+row with both keys + `width`/`height` + size fields) → browser PUTs main → PUTs
+thumbnail → `finalizePropertyImageUpload` (mirrors `original_key` into
+`storage_path`). Raw input is capped at 20 MB before processing; the server
+re-validates the processed sizes (main ≤ 4 MB, thumbnail ≤ 700 KB) and MIME
+types. Aspect ratio is preserved, transparent areas get a white background
+before JPEG conversion, and EXIF orientation is applied so phone photos are not
+rotated. Supabase Storage legacy rows still work unchanged.
 
 ### Storage abstraction — use it for ALL media operations
 
@@ -291,7 +320,9 @@ Not implemented here.
 Do NOT call `supabase.storage` or the R2 client directly from pages/components.
 
 ```text
-createPropertyImageUploadTarget(params) → presigned R2 PUT URL + key
+createPropertyImageUploadTarget(params) → presigned R2 PUT URL + key (single)
+createPropertyImageUploadTargetsForProcessedImages(params) → presigned PUT URLs
+  + keys for both the main image and the thumbnail
 createR2SignedReadUrl(key) / createR2SignedReadUrls(keys) → presigned GET URLs
 deleteR2Object(key)
 getPropertyImageSignedUrl(image, supabase) → one URL, either provider
