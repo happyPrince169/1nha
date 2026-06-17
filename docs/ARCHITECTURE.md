@@ -152,6 +152,54 @@ Rules:
 - Do not use WebView JavaScript injection for Facebook/Zalo/TikTok.
 ```
 
+## Authentication
+
+Auth uses **Supabase Auth with email + password** as the primary method.
+
+```text
+Sign in   -> /sign-in        signInWithPassword(email, password)
+Sign up   -> /sign-up        signUp(email, password) + display_name/phone metadata
+Forgot    -> /forgot-password resetPasswordForEmail(email)
+Reset     -> /reset-password  updateUser({ password }) (recovery session)
+Sign out  -> signOut()
+```
+
+Key points:
+
+```text
+- Password login is primary. Magic link remains as an optional, secondary
+  fallback (a hidden toggle on /sign-in) — it is no longer the default flow.
+- Signup may require email confirmation (Supabase "Confirm email" setting). On
+  success the UI tells the user to check their email before signing in.
+- Password recovery reuses the existing /api/auth/callback route: the email
+  link carries ?next=/reset-password, the callback exchanges the code for a
+  session, and the reset page calls updateUser to set the new password.
+- Existing magic-link-only users have no password — they use "Quên mật khẩu?"
+  to set one. No existing users/sessions are deleted or invalidated.
+```
+
+Profile data:
+
+```text
+- display_name + phone are captured at signup into auth user_metadata so they
+  survive email confirmation.
+- The user_profiles row (user_id, display_name, phone, company_name, role) is
+  created best-effort: immediately when signup returns a session, otherwise a
+  one-time backfill in the auth callback after confirmation. A failed profile
+  write never fails signup. Editing happens later on /dashboard/account.
+- Phone number is profile information only. There is NO SMS/OTP/phone auth in
+  this sprint; phone/SMS verification and MFA are future options.
+```
+
+Server-side auth rules:
+
+```text
+- All auth calls use the Supabase anon key via the SSR client (server.ts).
+- Never use the service role key on the client; never expose secrets.
+- Dashboard pages/actions auth-gate via supabase.auth.getUser() (per-page),
+  unchanged by this work.
+```
+
 ## Property Flow
 
 Property inventory is the core object.

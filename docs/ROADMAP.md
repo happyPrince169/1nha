@@ -39,10 +39,16 @@ This loop is the current priority.
 
 ```text
 Supabase Auth
+Email + password sign in / sign up (primary)  ✅
+Forgot password + reset password              ✅
+Magic link kept as optional secondary fallback ✅
 Protected dashboard
 Mobile-first dashboard shell
 Bottom navigation
 ```
+
+Magic-link-only login has been replaced by email + password (DONE). Existing
+magic-link users set a password via "Quên mật khẩu?". Phone is profile-only.
 
 ### 2. Property Inventory
 
@@ -270,6 +276,26 @@ Tasks:
 - safe-area polish
 - mobile viewport polish
 ```
+
+### 5. Auth Enhancements (later)
+
+Goal:
+
+```text
+Strengthen auth after product validation — not now.
+```
+
+Future options (only if real need appears):
+
+```text
+- Optional phone number verification (profile-level, not identity).
+- SMS OTP signup/login — only if the market clearly needs phone-first auth.
+- MFA (multi-factor) for higher-security accounts / teams.
+- OAuth / Zalo login — not planned yet.
+```
+
+Current sprint deliberately excludes SMS OTP, Twilio/Vonage, OAuth, MFA,
+passkeys, and phone-only identity.
 
 ## Medium-Term Roadmap
 

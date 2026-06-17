@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 import { useTransition } from "react";
 import { LogOut } from "lucide-react";
-import { signOut } from "@/app/(auth)/sign-in/actions";
+import { signOut } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
 
 type Props = {
