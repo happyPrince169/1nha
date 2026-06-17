@@ -52,9 +52,21 @@ function friendlyAuthError(message: string): string {
   return MSG.generic;
 }
 
+/**
+ * Build the absolute auth-callback URL Supabase will redirect email links to.
+ * Supabase requires an ABSOLUTE url here (and it must be listed in the project's
+ * Redirect URLs). A relative path silently breaks recovery/confirmation, so we
+ * fail loudly when NEXT_PUBLIC_SITE_URL is not configured.
+ */
 function callbackUrl(next: string): string {
-  const base = process.env.NEXT_PUBLIC_SITE_URL ?? "";
-  return `${base}/api/auth/callback?next=${encodeURIComponent(next)}`;
+  const base = process.env.NEXT_PUBLIC_SITE_URL;
+  if (!base) {
+    throw new Error(
+      "NEXT_PUBLIC_SITE_URL chưa được cấu hình. Đặt biến này trong .env.local " +
+        "(ví dụ http://localhost:3000) để link email xác thực/đặt lại mật khẩu hoạt động."
+    );
+  }
+  return `${base.replace(/\/+$/, "")}/api/auth/callback?next=${encodeURIComponent(next)}`;
 }
 
 // ---------------------------------------------------------------------------

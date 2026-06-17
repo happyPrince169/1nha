@@ -7,6 +7,47 @@ import { NextResponse, type NextRequest } from "next/server";
 const SIGN_IN_PATH = "/sign-in";
 const DASHBOARD_PATH = "/dashboard";
 
+// ---------------------------------------------------------------------------
+// Known stale-session error codes. These are EXPECTED when a refresh token
+// cookie is gone/rotated (e.g. after sign-out elsewhere, password change, or
+// old browser cookies). We treat the user as logged out and clear the stale
+// cookies — without crashing or spamming errors. We deliberately do NOT
+// swallow other auth errors.
+// ---------------------------------------------------------------------------
+const STALE_SESSION_CODES = new Set([
+  "refresh_token_not_found",
+  "invalid_refresh_token",
+  "refresh_token_already_used",
+]);
+
+function isStaleSessionError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; message?: string };
+  if (e.code && STALE_SESSION_CODES.has(e.code)) return true;
+  const msg = (e.message ?? "").toLowerCase();
+  return (
+    msg.includes("refresh token not found") ||
+    msg.includes("invalid refresh token") ||
+    msg.includes("refresh token already used")
+  );
+}
+
+/** Supabase SSR auth cookies are named `sb-<ref>-auth-token` (optionally
+ *  chunked: `…-auth-token.0`, `.1`). Match the family generically. */
+function isSupabaseAuthCookie(name: string): boolean {
+  return name.startsWith("sb-") && name.includes("auth-token");
+}
+
+/** Expire any Supabase auth cookies on the given response so the browser drops
+ *  the stale session and stops re-sending the dead refresh token. */
+function clearAuthCookies(request: NextRequest, response: NextResponse): void {
+  for (const cookie of request.cookies.getAll()) {
+    if (isSupabaseAuthCookie(cookie.name)) {
+      response.cookies.set(cookie.name, "", { maxAge: 0, path: "/" });
+    }
+  }
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -46,10 +87,22 @@ export async function proxy(request: NextRequest) {
 
   // getUser() validates the JWT on every request — never use getSession() here
   // because the session can be spoofed from the browser cookie store.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  //
+  // A stale/missing refresh token is an EXPECTED condition: Supabase returns it
+  // as an error (and may even throw on a network hiccup). Handle it gracefully
+  // — treat the user as logged out and clear the dead cookies — rather than
+  // letting it bubble up as a 500 or noisy console error.
+  let user = null;
+  let authError: unknown = null;
+  try {
+    const result = await supabase.auth.getUser();
+    user = result.data.user;
+    authError = result.error;
+  } catch (err) {
+    authError = err;
+  }
 
+  const stale = isStaleSessionError(authError);
   const isAuthenticated = !!user;
   const isOnSignIn = pathname.startsWith(SIGN_IN_PATH);
   const isOnDashboard = pathname.startsWith(DASHBOARD_PATH);
@@ -62,10 +115,17 @@ export async function proxy(request: NextRequest) {
   // Unauthenticated → block every dashboard route
   if (!isAuthenticated && isOnDashboard) {
     const loginUrl = new URL(SIGN_IN_PATH, request.url);
-    // Pass destination so callback can redirect back after login
+    // Pass destination so the user returns here after logging in
     loginUrl.searchParams.set("next", pathname);
-    return NextResponse.redirect(loginUrl);
+    const redirectRes = NextResponse.redirect(loginUrl);
+    // Drop the dead session cookies on the way out so the noise stops.
+    if (stale) clearAuthCookies(request, redirectRes);
+    return redirectRes;
   }
+
+  // On a public/auth route with a stale cookie: clear it (so subsequent
+  // requests carry no dead token) but let the request through.
+  if (stale) clearAuthCookies(request, response);
 
   return response;
 }

@@ -200,6 +200,58 @@ Server-side auth rules:
   unchanged by this work.
 ```
 
+### Auth callback + email links
+
+The `/api/auth/callback` route exchanges the one-time `code` for a session for
+all email links (password recovery `?next=/reset-password`, email confirmation,
+magic-link fallback). It is hardened against bad/expired links:
+
+```text
+- ?error / ?error_code on the callback  → redirect to /sign-in?status=...
+    error_code=otp_expired → status=link_expired
+    any other auth error   → status=auth_link_error
+- exchangeCodeForSession fails / no code → /sign-in?status=auth_link_error
+- `next` is validated: must start with "/" and not "//"; else /dashboard.
+- Users never land on /?error=... with raw Supabase params.
+```
+
+Recovery `redirectTo` must be ABSOLUTE and built from `NEXT_PUBLIC_SITE_URL`
+(`${SITE_URL}/api/auth/callback?next=/reset-password`). If `NEXT_PUBLIC_SITE_URL`
+is missing the auth actions throw a clear developer error instead of sending a
+broken relative link.
+
+### Required Supabase Auth URL configuration
+
+In the Supabase dashboard → Authentication → URL Configuration, the callback
+must be listed under **Redirect URLs** (otherwise Supabase falls back to the
+Site URL root and the link arrives as `/?error=...`):
+
+```text
+Local:
+  http://localhost:3000/api/auth/callback
+
+Production:
+  https://1nha.online/api/auth/callback
+  https://www.1nha.online/api/auth/callback   # if the www host is used
+```
+
+Set the **Site URL** to the production origin (e.g. `https://1nha.online`).
+
+> If password recovery still redirects to the root with error params, the cause
+> is almost always a missing/typo'd entry in Redirect URLs or a wrong Site URL —
+> check Supabase Auth URL Configuration first.
+
+### Stale refresh tokens
+
+The proxy (`src/proxy.ts`) validates the session with `getUser()` on each
+request. A missing/rotated refresh token is an EXPECTED condition (sign-out
+elsewhere, old cookies). Known stale-session errors
+(`refresh_token_not_found`, `invalid_refresh_token`,
+`refresh_token_already_used`) are handled gracefully: the user is treated as
+logged out, the `sb-*-auth-token` cookies are expired, and protected dashboard
+routes redirect to `/sign-in`. Other auth errors are NOT suppressed. If a user
+is somehow stuck, clearing site data removes the stale cookies.
+
 ## Property Flow
 
 Property inventory is the core object.

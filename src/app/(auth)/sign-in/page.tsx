@@ -22,12 +22,34 @@ export default async function SignInPage({
 }) {
   const { status } = await searchParams;
 
-  const banner =
-    status === "password_updated"
-      ? "Mật khẩu đã được cập nhật. Vui lòng đăng nhập lại."
-      : status === "check_email"
-        ? "Đã gửi link đăng nhập. Vui lòng kiểm tra email — link có hiệu lực trong 1 giờ."
-        : null;
+  // Friendly Vietnamese status banners. `tone` controls styling: "success"
+  // (green) vs "error" (red) for failed/expired email links.
+  const STATUS_BANNERS: Record<
+    string,
+    { tone: "success" | "error"; message: string }
+  > = {
+    password_updated: {
+      tone: "success",
+      message: "Mật khẩu đã được cập nhật. Vui lòng đăng nhập lại.",
+    },
+    check_email: {
+      tone: "success",
+      message:
+        "Đã gửi link đăng nhập. Vui lòng kiểm tra email — link có hiệu lực trong 1 giờ.",
+    },
+    link_expired: {
+      tone: "error",
+      message:
+        "Link đã hết hạn hoặc không còn hợp lệ. Vui lòng gửi lại email đặt mật khẩu mới.",
+    },
+    auth_link_error: {
+      tone: "error",
+      message:
+        "Không thể xác thực link email. Vui lòng thử gửi lại link mới.",
+    },
+  };
+
+  const banner = status ? STATUS_BANNERS[status] : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -47,8 +69,14 @@ export default async function SignInPage({
 
         <CardContent className="flex flex-col gap-4">
           {banner && (
-            <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
-              {banner}
+            <p
+              className={
+                banner.tone === "error"
+                  ? "rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                  : "rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400"
+              }
+            >
+              {banner.message}
             </p>
           )}
           <SignInForm />

@@ -46,6 +46,11 @@ export function ForgotPasswordForm() {
         </p>
       )}
 
+      <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+        Vui lòng mở email mới nhất từ 1nha. Link đặt lại mật khẩu chỉ dùng được
+        trong một lần và có thể hết hạn.
+      </p>
+
       <div className="flex flex-col gap-1.5">
         <label htmlFor="email" className="text-sm font-medium leading-none">
           Email
