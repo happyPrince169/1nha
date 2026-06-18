@@ -133,19 +133,27 @@ export default async function PostAssistantPage({ params }: Props) {
   let pickerImages: PickerImage[] = [];
 
   if (imageRows && imageRows.length > 0) {
-    // Post Assistant needs full-resolution images for download/copy/open, so
-    // sign the originals (default variant). Works for both R2 and legacy rows.
-    const urlById = await getPropertyImageSignedUrls(imageRows, supabase);
+    // Split by purpose to avoid loading full-resolution originals as previews:
+    //   • thumbnail signed URLs → the preview grid <img> (fast)
+    //   • original signed URLs  → download / copy / open actions (full quality)
+    // Both batched per provider; legacy Supabase rows fall back to the same
+    // path for both variants, so they keep working unchanged.
+    const [thumbById, originalById] = await Promise.all([
+      getPropertyImageSignedUrls(imageRows, supabase, { variant: "thumbnail" }),
+      getPropertyImageSignedUrls(imageRows, supabase),
+    ]);
 
     pickerImages = imageRows
       .map((r) => ({
         id: r.id,
-        signedUrl: urlById.get(r.id) ?? "",
+        thumbnailUrl: thumbById.get(r.id) ?? originalById.get(r.id) ?? "",
+        originalUrl: originalById.get(r.id) ?? "",
         altText: r.alt_text,
         caption: r.caption,
         isCover: r.is_cover,
       }))
-      .filter((img) => img.signedUrl !== "");
+      // Actions need a usable original; drop rows without one.
+      .filter((img) => img.originalUrl !== "");
   }
 
   // Track page open — fire-and-forget, never blocks render

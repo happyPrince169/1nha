@@ -2,11 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
 import {
   getPropertyImageSignedUrls,
   R2_PENDING_PATH,
 } from "@/lib/storage/property-media";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { getPropertyById } from "@/lib/services/properties";
+import { toApiError } from "@/lib/api/errors";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { Badge } from "@/components/ui/badge";
@@ -54,23 +56,19 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function PropertyDetailPage({ params }: Props) {
   const { id } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
+  // Organization-scoped read via the shared service (throws NOT_FOUND across orgs).
+  let property;
+  try {
+    property = await getPropertyById(ctx, id);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
+  }
 
-  const { data: property, error } = await supabase
-    .from("properties")
-    .select(
-      "id,title,property_type,status,city,district,ward,street,price,area,bedrooms,bathrooms,house_direction,frontage,alley_width,legal_status,description,strengths,weaknesses,owner_note,planning_note,created_at"
-    )
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single();
-
-  if (error || !property) notFound();
+  const supabase = ctx.supabase;
 
   // Fetch cover image (or first image) for the images section preview
   const { data: coverImages } = await supabase
@@ -79,7 +77,7 @@ export default async function PropertyDetailPage({ params }: Props) {
       "id, storage_path, file_name, alt_text, is_cover, storage_provider, original_key, thumbnail_key, preview_key"
     )
     .eq("property_id", id)
-    .eq("user_id", user.id)
+    .eq("user_id", ctx.userId)
     .neq("storage_path", "__pending__")
     .neq("storage_path", R2_PENDING_PATH)
     .order("is_cover", { ascending: false })
@@ -107,7 +105,7 @@ export default async function PropertyDetailPage({ params }: Props) {
     .from("generated_contents")
     .select("id, platform, content_type, content, created_at")
     .eq("property_id", id)
-    .eq("user_id", user.id)
+    .eq("user_id", ctx.userId)
     .order("created_at", { ascending: false })
     .limit(10);
 

@@ -33,6 +33,179 @@ Nhập nguồn
 
 This loop is the current priority.
 
+## SaaS Architecture Roadmap (Phased)
+
+1nha is moving toward a serious SaaS architecture for individual brokers, small
+teams, small agencies, and a future native mobile app. This is delivered in
+phases — **one phase at a time, never all at once**. Each phase must keep the
+existing single-user broker workflow fully working.
+
+### Phase 1 — Performance & scale guardrails 🟡 IN PROGRESS
+
+```text
+- Property list pagination / limit (default page size 50, server-side .range()).
+- Loading skeletons for heavy dashboard routes
+  (properties list, property detail, property images, Post Assistant).
+- Post Assistant thumbnail/original split
+  (preview grid uses thumbnail signed URLs; open/download/copy use originals).
+- Review double auth validation + Vercel region config — implement ONLY if safe.
+```
+
+No schema changes. Query stays scoped by `user_id`. No `organization_id` yet.
+
+### Phase 2 — Workspace foundation + RLS + migration
+
+**Phase 2A — 🟢 IMPLEMENTED** (schema + RLS + migration + bootstrap):
+
+```text
+- organizations + organization_members tables (+ indexes, constraints).
+- Personal workspace auto-created for EVERY existing user (backfill) and EVERY
+  new user (auth.users AFTER INSERT trigger → personal "… Workspace").
+- organization_id added to properties, generated_contents,
+  content_style_profiles, usage_events (all backfilled).
+- properties.created_by + properties.assigned_to (backfilled to the owner);
+  generated_contents.created_by + content_style_profiles.created_by.
+- BEFORE INSERT triggers auto-tag organization_id / created_by / assigned_to
+  from user_id, so every insert is correctly scoped even from older code.
+- Membership-based RLS via SECURITY DEFINER helpers
+  (is_organization_member / organization_role / can_manage_organization),
+  additive to the existing user_id policies; property_images is scoped
+  through its parent property's organization.
+- Server-only helper src/lib/workspace/current.ts resolves the current
+  workspace; property/content/style-profile inserts now set organization_id.
+- The single-user experience is unchanged.
+```
+
+Migrations: `20240109000001_organizations.sql`,
+`20240109000002_core_tables_organization_id.sql`.
+
+**Current limitation (by design):** there is NO Team UI, no member list, no
+invite flow, and no workspace switcher yet. Reads remain user_id-scoped (which,
+for a one-member personal workspace, is exactly equivalent to org-scoping).
+**Phase 4** adds member management UI and org-scoped read filters
+(team sources / my sources / assigned to me).
+
+Remaining Phase 2 work (later): nothing blocking — the data model and RLS are
+team-ready; tightening the new columns to NOT NULL can happen once the app is
+fully deployed (see ARCHITECTURE.md migration notes).
+
+### Phase 3 — Service layer + mobile-ready API routes
+
+**Phase 3A — 🟢 IMPLEMENTED** (Properties workflow only):
+
+```text
+- Shared API conventions: src/lib/api/responses.ts (+ errors.ts).
+    success → { ok: true, data }
+    error   → { ok: false, error: { code, message } }
+    codes   → UNAUTHORIZED | FORBIDDEN | NOT_FOUND | VALIDATION_ERROR | INTERNAL_ERROR
+- Request/workspace context: src/lib/workspace/request-context.ts (server-only)
+    resolves { supabase, userId, organizationId, role }; throws ApiError.
+- Properties service: src/lib/services/properties.ts (server-only)
+    listProperties / getPropertyById / createProperty / updateProperty /
+    archiveProperty + parsePropertyListParams + validatePropertyInput.
+    Organization-scoped; preserves Phase 1 pagination (PAGE_SIZE=50, +1 row →
+    hasNextPage) and all filters/search/sort.
+- Web Server Actions + pages now call the service (list page, new, edit,
+  archive, detail) — UI unchanged.
+- Mobile-ready API routes (Properties only):
+    GET/POST  /api/properties
+    GET/PATCH /api/properties/[id]
+    POST      /api/properties/[id]/archive
+```
+
+Still using the SAME service from both web actions and API routes.
+
+**Current limitations (by design):** API routes exist for Properties ONLY.
+Images, content generation, style profiles, and Post Assistant are NOT yet
+exposed as services/API routes. There is no mobile app yet. Remaining Phase 3
+(images/content/style/post-assistant service + API migration) is future work.
+
+**Phase 3A.1 — 🟢 IMPLEMENTED** (API auth contract):
+
+```text
+- /api routes authenticate via EITHER a Supabase session cookie (web) OR
+  `Authorization: Bearer <supabase_access_token>` (future Expo/mobile).
+- Both validated server-side via supabase.auth.getUser(); Bearer path uses the
+  ANON key with the token as a global header (RLS-scoped, no service-role key).
+- getRequestContext() signature unchanged — header read via next/headers, so no
+  route-handler refactor was needed.
+- Strict Authorization precedence: header absent → cookie auth; valid
+  `Bearer <token>` → Bearer auth; header present but malformed/invalid → 401
+  UNAUTHORIZED (NO cookie fallback once an Authorization header is present).
+- Verified: unauthenticated → 401; malformed header → 401; invalid Bearer → 401.
+- Prepares the backend for Expo/mobile clients. No mobile app exists yet.
+```
+
+**Phase 3A.2 — 🟢 IMPLEMENTED** (phone-first auth + SMS OTP foundation):
+
+```text
+- Vietnamese phone normalization helper (src/lib/auth/phone.ts → E.164, +84).
+- sendPhoneOtp / verifyPhoneOtp server actions (Supabase Phone Auth;
+  signInWithOtp + verifyOtp type:"sms"). App never generates/stores/logs OTP.
+- /sign-in is phone-first ("Đăng nhập bằng số điện thoại" → OTP step with đổi
+  số / gửi lại mã + cooldown); email/password kept as a clear fallback card.
+- /sign-up nudges to phone login; email sign-up retained as fallback.
+- Phone users (email may be null): best-effort user_profiles upsert
+  (ignoreDuplicates) + personal workspace via the existing auth.users trigger.
+  No DB schema change (user_profiles has no email column).
+```
+
+**Requires Supabase config** (Phone provider enabled; secrets never in
+NEXT_PUBLIC env). No mobile app yet.
+
+**Phase 3A.3 — 🟢 IMPLEMENTED** (Vietnam OTP provider via Send SMS Hook):
+
+```text
+- POST /api/auth/sms-hook receives Supabase's Send SMS Hook payload
+  { user:{id,phone}, sms:{otp} }, authorized by SUPABASE_SEND_SMS_HOOK_SECRET
+  (x-1nha-hook-secret header, or ?secret= fallback). Supabase still
+  generates + verifies the OTP; the app only delivers it (never stores/logs it).
+- Provider abstraction: src/lib/otp/send-otp.ts + providers/{types,esms}.ts.
+  eSMS first (ESMS_MODE = sms_only | zns_sms with Zalo ZNS → SMS fallback),
+  OTP_PROVIDER selectable; Stringee/VIHAT/VietGuys/Zalo can be added later.
+- Status: 200 sent · 401 bad secret · 400 bad payload · 502 provider failed ·
+  500 provider/env misconfig. Secure-by-default (rejects if secret unset).
+- Setup + test checklist: docs/SMS_OTP_PROVIDER_SETUP.md.
+```
+
+Sign-in UI and sendPhoneOtp/verifyPhoneOtp from 3A.2 are unchanged. Exact eSMS
+payload must be verified against eSMS docs before production (adapter isolated;
+use ESMS_SANDBOX=1 to validate). No mobile app yet.
+
+### Phase 4 — Team UI MVP
+
+```text
+- Workspace settings
+- Member list
+- Invite member
+- Roles: owner / admin / member
+- created_by / assigned_to visibility
+- Filters: team sources / my sources / assigned to me
+```
+
+### Phase 5 — Mobile app skeleton (Expo React Native, later)
+
+```text
+- Auth
+- Workspace
+- Property list / detail
+- Quick Add (basic)
+```
+
+### Phase 6 — Native mobile workflow
+
+```text
+- Camera-first upload
+- Multi-image picker
+- Native share sheet
+- Receive shared content/images from Zalo/Facebook if feasible
+- Push reminders
+- Offline draft (later)
+```
+
+> Phases 2–6 are recorded here for direction only. Do NOT implement them until
+> the current phase is complete and reviewed.
+
 ## Completed or Mostly Completed
 
 ### 1. Auth and Dashboard

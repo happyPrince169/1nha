@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { SignInForm } from "./sign-in-form";
+import { PhoneSignInForm } from "./phone-sign-in-form";
 import { MagicLinkFallback } from "./magic-link-fallback";
 import {
   Card,
@@ -59,11 +60,12 @@ export default async function SignInPage({
         <p className="text-sm text-muted-foreground">Đăng nhập để tiếp tục</p>
       </div>
 
+      {/* Primary: phone + SMS OTP */}
       <Card>
         <CardHeader>
-          <CardTitle>Đăng nhập</CardTitle>
+          <CardTitle>Đăng nhập bằng số điện thoại</CardTitle>
           <CardDescription>
-            Dùng email và mật khẩu để đăng nhập vào 1nha.
+            Nhập số di động để nhận mã OTP qua SMS. Nhanh và không cần mật khẩu.
           </CardDescription>
         </CardHeader>
 
@@ -79,6 +81,20 @@ export default async function SignInPage({
               {banner.message}
             </p>
           )}
+          <PhoneSignInForm />
+        </CardContent>
+      </Card>
+
+      {/* Fallback: email + password */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Tiếp tục bằng email</CardTitle>
+          <CardDescription>
+            Vẫn dùng được email và mật khẩu như trước.
+          </CardDescription>
+        </CardHeader>
+
+        <CardContent className="flex flex-col gap-4">
           <SignInForm />
         </CardContent>
 

@@ -136,9 +136,106 @@ credit_ledger
 subscriptions
 ```
 
+## Workspaces / Organizations (Phase 2A)
+
+1nha's data model is workspace-ready. Every user belongs to at least one
+**organization** (their auto-created personal workspace). The single-user
+experience is unchanged — there is no Team UI yet.
+
+### Tables
+
+```text
+organizations
+  id, name, type ('personal'|'team'|'company'), owner_user_id,
+  created_at, updated_at
+
+organization_members
+  id, organization_id, user_id,
+  role ('owner'|'admin'|'member'), status ('active'|'invited'|'removed'),
+  invited_by, created_at, updated_at, unique(organization_id, user_id)
+```
+
+Core tables gained organization scoping (all NULLABLE, backfilled):
+
+```text
+properties.organization_id, properties.created_by, properties.assigned_to
+generated_contents.organization_id, generated_contents.created_by
+content_style_profiles.organization_id, content_style_profiles.created_by
+usage_events.organization_id
+property_images → scoped THROUGH properties.organization_id (no own column)
+```
+
+### Personal workspace bootstrap
+
+```text
+- Existing users: a backfill creates one personal organization + owner
+  membership each (name = "<display name | email prefix> Workspace",
+  else "Workspace cá nhân").
+- New users: an AFTER INSERT trigger on auth.users
+  (handle_new_user_organization → create_personal_organization_for) creates
+  the personal workspace. This is the ONLY auth.users trigger; there is no
+  prior handle_new_user function (user_profiles is still created in app code).
+- BEFORE INSERT triggers on the core tables (set_org_from_user, etc.) auto-tag
+  organization_id / created_by / assigned_to from user_id, so inserts are
+  always scoped even from code that predates this change.
+```
+
+### RLS / security model
+
+```text
+- Membership is checked via SECURITY DEFINER helpers
+  (is_organization_member, organization_role, can_manage_organization), all
+  with search_path = '' and fully-qualified names. Being SECURITY DEFINER,
+  they bypass RLS internally, so organization_members' own SELECT policy can
+  call is_organization_member without infinite recursion.
+- organizations: members SELECT; owner/admin UPDATE.
+- organization_members: members SELECT the roster. NO insert/update/delete
+  policies in Phase 2A — membership is created only by the SECURITY DEFINER
+  bootstrap functions. Phase 4 adds owner/admin-gated member writes.
+- Core tables: PERMISSIVE org-member policies are ADDED alongside the existing
+  user_id policies (additive → can only widen access for active members, never
+  restrict the solo flow). property_images is gated by membership of its parent
+  property's organization.
+- Internal bootstrap functions (create_personal_organization_for,
+  set_org_from_user, handle_new_user_organization) are REVOKEd from PUBLIC;
+  only ensure_personal_organization() (auth.uid()-scoped) is callable by
+  authenticated clients via RPC.
+- No service-role key is used anywhere in app code; all access is the user's
+  RLS-scoped anon session.
+```
+
+### Resolving the current workspace (app code)
+
+```text
+src/lib/workspace/current.ts  (server-only)
+  getCurrentWorkspace()      → { organizationId, role } | null
+  getCurrentOrganizationId() → string | null
+```
+
+It prefers the personal organization, falls back to the earliest active
+membership, and bootstraps via the `ensure_personal_organization` RPC if a user
+somehow has none. Never import it from a Client Component. Phase 4 will layer a
+workspace switcher on top of this single entry point.
+
+### Migration / deployment notes
+
+```text
+- Apply 20240109000001 then 20240109000002 BEFORE deploying the app build.
+  The BEFORE INSERT auto-tag triggers mean the OLD app build keeps working in
+  the window between migration and deploy (its inserts get tagged at the DB).
+- New org columns are intentionally left NULLABLE. A future migration may set
+  them NOT NULL once the updated app is fully deployed and every insert path
+  supplies them — do NOT tighten during this phase (would risk the rollout).
+- The auth.users trigger requires the migration role's privileges (standard
+  Supabase). If a hosted environment blocks auth.users triggers, the app-side
+  ensure_personal_organization() RPC fallback still covers new users on first
+  authenticated request.
+```
+
 ## Ownership and Security
 
-All dashboard data must be scoped by `user_id`.
+All dashboard data must be scoped by `user_id` (and, since Phase 2A, by
+`organization_id` — currently equivalent for personal workspaces).
 
 Rules:
 
@@ -251,6 +348,203 @@ elsewhere, old cookies). Known stale-session errors
 logged out, the `sb-*-auth-token` cookies are expired, and protected dashboard
 routes redirect to `/sign-in`. Other auth errors are NOT suppressed. If a user
 is somehow stuck, clearing site data removes the stale cookies.
+
+### Phone-first auth + SMS OTP (Phase 3A.2)
+
+Phone + SMS OTP is the **primary** sign-in UX; email/password remains a fully
+working fallback (nothing was removed).
+
+```text
+Send OTP   -> sendPhoneOtp     normalizeVietnamesePhone() + signInWithOtp({ phone })
+Verify     -> verifyPhoneOtp   verifyOtp({ phone, token, type: "sms" }) → session
+Fallbacks  -> signInWithPassword / signUpWithPassword / forgot / reset (unchanged)
+```
+
+- **Normalization:** `src/lib/auth/phone.ts` (pure) maps VN input to E.164
+  (`0936389336` / `84936…` / `+84936…` → `+84936389336`), strips spaces/dots/
+  hyphens, rejects landlines + non-mobile with a Vietnamese error. Vietnam-only
+  (+84); no country selector yet.
+- **OTP lifecycle is Supabase's:** the app never generates, stores, or logs OTP
+  codes/tokens. `verifyOtp` returns the session; cookies are set by the SSR
+  client exactly like password login (so `/api/*` Bearer + cookie auth both keep
+  working with the resulting access token).
+- **Phone users with no email:** `verifyPhoneOtp` best-effort upserts a
+  `user_profiles` row (`ignoreDuplicates` → never overwrites an existing one);
+  the personal workspace is created by the existing `auth.users` trigger
+  regardless of email (workspace name falls back to "Workspace cá nhân").
+  `user_profiles` has no email column, so **no schema change was needed**.
+
+#### Required Supabase dashboard setup (before phone login works)
+
+```text
+Authentication → Providers → Phone: ENABLE.
+Authentication → Providers → Phone → SMS provider: configure one
+  (Twilio / MessageBird / Vonage / Textlocal, or a custom Send-SMS hook later).
+  → SMS provider secrets live in the Supabase dashboard, NEVER in NEXT_PUBLIC_* env.
+Authentication → Rate limits: set OTP send/verify limits sensibly.
+Test with a real Vietnamese mobile number (+84…).
+Email/password remains the fallback and needs no extra config.
+```
+
+> Current phase uses **Supabase Phone Auth**. As of Phase 3A.3, OTP delivery is
+> routed to a **Vietnam provider (eSMS)** via the **Supabase Send SMS Hook** —
+> see below and `docs/SMS_OTP_PROVIDER_SETUP.md`.
+
+### Vietnam OTP delivery via Send SMS Hook (Phase 3A.3)
+
+Supabase still **generates and verifies** the OTP; it calls our endpoint only to
+**deliver** it through a Vietnam provider. The app never generates/stores/
+verifies/logs OTPs.
+
+```text
+Endpoint:  POST /api/auth/sms-hook   (nodejs runtime)
+Auth:      shared secret SUPABASE_SEND_SMS_HOOK_SECRET
+             header x-1nha-hook-secret (preferred) | ?secret= (fallback)
+Payload:   { user:{ id, phone }, sms:{ otp } }   (Supabase Send SMS Hook contract)
+Status:    200 sent · 401 bad secret · 400 bad payload · 502 provider failed ·
+           500 provider/env misconfig
+Provider:  src/lib/otp/send-otp.ts → providers/esms.ts (OTP_PROVIDER, default esms)
+             ESMS_MODE = sms_only | zns_sms (Zalo ZNS → SMS fallback)
+```
+
+All provider secrets are server-only (never `NEXT_PUBLIC_*`). Supabase Auth rate
+limits remain authoritative; no OTP logs table is added. The eSMS payload
+specifics are isolated in `providers/esms.ts` and must be verified against eSMS
+docs before production (use `ESMS_SANDBOX=1` to validate). Future providers
+(Stringee/VIHAT/VietGuys/Zalo) plug in via the same abstraction.
+
+## Service layer & mobile-ready API (Phase 3A)
+
+Business logic lives in a server-only **service layer** that is the single
+source of truth for both the web app (Server Actions / Server Components) and
+the JSON API routes (future Expo mobile app). Phase 3A migrated the
+**Properties** workflow only.
+
+### Standard API envelope
+
+```text
+src/lib/api/responses.ts   jsonOk(data) / jsonError(err)
+src/lib/api/errors.ts      ApiError + codes
+
+success → { "ok": true,  "data": ... }
+error   → { "ok": false, "error": { "code": "...", "message": "..." } }
+
+codes (→ HTTP):
+  UNAUTHORIZED 401 · FORBIDDEN 403 · NOT_FOUND 404 ·
+  VALIDATION_ERROR 422 · INTERNAL_ERROR 500
+```
+
+Services THROW `ApiError`; route handlers `try/catch → jsonError(err)`; Server
+Actions `try/catch → { error: toApiError(err).message }` (Vietnamese messages
+preserved). `responses.ts` is the only piece that imports `next/server`, so the
+service stays transport-agnostic.
+
+### Request / workspace context
+
+```text
+src/lib/workspace/request-context.ts  (server-only)
+  getRequestContext()     → { supabase, userId, organizationId, role } | throws
+  tryGetRequestContext()  → same | null   (for Server Components that render a
+                                            fallback instead of throwing)
+```
+
+Built on one Supabase server client (the user's RLS-scoped anon session — NO
+service-role key). Workspace resolution is shared with Phase 2A via
+`resolveWorkspaceForUser` in `src/lib/workspace/current.ts`.
+
+### Properties service
+
+```text
+src/lib/services/properties.ts  (server-only)
+  parsePropertyListParams(raw)            → typed filters/sort/page
+  listProperties(ctx, params)             → { items, page, pageSize, hasNextPage }
+  getPropertyById(ctx, id)                → PropertyRecord  (NOT_FOUND across orgs)
+  createProperty(ctx, input)              → { id }
+  updateProperty(ctx, id, input)          → void            (NOT_FOUND across orgs)
+  archiveProperty(ctx, id)                → void            (NOT_FOUND across orgs)
+  validatePropertyInput(input)            → throws VALIDATION_ERROR (Vietnamese)
+```
+
+- Organization-scoped: reads/writes match `organization_id = ctx.organizationId`
+  (RLS is the backstop). For a solo broker this is identical to the previous
+  `user_id` scoping. Inserts still set `user_id` (legacy) **plus**
+  `organization_id` / `created_by` / `assigned_to`.
+- Preserves Phase 1 pagination: `PAGE_SIZE = 50`, fetch `PAGE_SIZE + 1` →
+  `hasNextPage` (no expensive COUNT). List select stays lightweight.
+- Cross-org reads/writes return `NOT_FOUND`, never another workspace's data.
+
+### Properties API routes (web + future Expo)
+
+```text
+GET    /api/properties              list (query params = same as the web URL)
+POST   /api/properties              create
+GET    /api/properties/[id]         fetch one
+PATCH  /api/properties/[id]         update
+POST   /api/properties/[id]/archive archive
+```
+
+All authenticated + organization-scoped, paginated by default, same service as
+the web actions. Verified: unauthenticated requests return
+`401 { ok:false, error:{ code:"UNAUTHORIZED" } }`.
+
+**Limitations (Phase 3A):** API/service exist for Properties ONLY. Property
+images, content generation, style profiles, and Post Assistant are NOT yet
+migrated and still run through their existing Server Actions. No mobile app yet.
+
+### API authentication contract (Phase 3A.1)
+
+`getRequestContext()` authenticates from **two** sources, both validated
+server-side via `supabase.auth.getUser()` (never a local JWT decode):
+
+```text
+1. Authorization: Bearer <supabase_access_token>   ← non-browser clients (Expo)
+2. Supabase session cookies                         ← the web app (default)
+```
+
+- **Strict Authorization precedence** (Phase 3A.1 correction):
+  - Header **absent** → cookie/session auth (web app default).
+  - `Authorization: Bearer <token>` → Bearer auth.
+  - Header **present but malformed** (wrong scheme, empty, or no token) →
+    `UNAUTHORIZED` immediately — it does **NOT** fall back to cookies.
+  - `Bearer <invalid/expired token>` → `UNAUTHORIZED` (rejected by `getUser()`).
+  Cookie fallback happens **only** when the Authorization header is absent.
+  The header is read via `next/headers`, so the helper keeps a stable signature
+  across route handlers, Server Components, and Server Actions (no `NextRequest`
+  threading).
+- The Bearer path uses `createBearerClient(token)` (`src/lib/supabase/server.ts`):
+  the public **anon** key with the token as a global `Authorization` header, so
+  both auth validation and every DB/Storage call run AS that user — RLS-scoped
+  exactly like the cookie session. No session is persisted; **no service-role
+  key** is ever used.
+- `/api/*` routes are NOT matched by the proxy (`src/proxy.ts` matcher is
+  `/dashboard/:path*` + `/sign-in`); each route self-authenticates through the
+  service context. This prepares the backend for an Expo/mobile client — **no
+  mobile app exists yet.**
+
+#### Manual API auth tests
+
+```bash
+# 1. Unauthenticated → 401 standard envelope
+curl -i https://<host>/api/properties
+# → { "ok": false, "error": { "code": "UNAUTHORIZED", "message": "..." } }
+
+# 2. Bearer token (future mobile client) → 200 success envelope
+curl -i https://<host>/api/properties \
+  -H "Authorization: Bearer <SUPABASE_ACCESS_TOKEN>"
+# → { "ok": true, "data": { "items": [...], "page": 1, "pageSize": 50, "hasNextPage": false } }
+
+# 3. Invalid/expired Bearer token → 401 (validated server-side, never trusted)
+curl -i https://<host>/api/properties -H "Authorization: Bearer invalid.token"
+
+# 4. Malformed Authorization header → 401 (strict: NO cookie fallback)
+curl -i https://<host>/api/properties -H "Authorization: Invalid token"
+```
+
+Obtain a real `<SUPABASE_ACCESS_TOKEN>` for testing by signing in via the
+Supabase JS client and reading `session.access_token` (e.g. in browser devtools
+after login: `JSON.parse(localStorage[Object.keys(localStorage).find(k=>k.endsWith('-auth-token'))]).access_token`),
+or from a `signInWithPassword` response. **Never commit real tokens.**
+The cookie path is exercised by simply using the web app while signed in.
 
 ## Property Flow
 
@@ -475,6 +769,53 @@ For image-heavy flows:
 - Batch signed URL creation.
 - Lazy-load images.
 ```
+
+### Scale guardrails (Phase 1)
+
+```text
+- Property list is paginated server-side: PAGE_SIZE = 50, Supabase .range().
+  The query fetches PAGE_SIZE + 1 rows to detect "has next page" cheaply
+  (no expensive exact COUNT). `?page=N` search param keeps URLs shareable and
+  composes with all existing filter/search/sort params.
+- Property list select stays lightweight (id, title, district, price, area,
+  status, created_at) — heavy fields (description/notes/etc.) load only on the
+  detail page.
+- Heavy dashboard routes have loading.tsx skeletons so navigation feels instant:
+  /dashboard/properties, /dashboard/properties/[id],
+  /dashboard/properties/[id]/images, and the Post Assistant
+  (/dashboard/properties/[id]/content/[contentId]/post).
+- Post Assistant previews use THUMBNAIL signed URLs in the grid; the
+  original/main signed URL is used only for open / download / copy actions.
+  Both URLs are passed to the client; <img> never loads the original.
+```
+
+### Double auth validation — reviewed, kept intentional
+
+The proxy (`src/proxy.ts`) validates the session on `/dashboard/**`, and each
+dashboard Server Component ALSO calls `supabase.auth.getUser()`. This duplicate
+call is **deliberately retained**:
+
+```text
+- getUser() is the authoritative per-request JWT validation. A Server Component
+  must not trust that the proxy ran (matcher edits, future route moves, direct
+  RSC/data requests) — it needs the verified user to scope queries by user_id.
+- The proxy and the page run in different execution contexts; the page cannot
+  read a "user" the proxy validated without re-fetching it.
+- Security/ownership correctness outweighs shaving one cached JWT check.
+```
+
+Do not remove per-page `getUser()` without a vetted, shared auth helper that
+preserves the same security guarantees.
+
+### TODO — confirm Supabase region before pinning Vercel region
+
+No `vercel.json` region is pinned. The Supabase project region is **not
+inferable** from the project ref / env vars, so we do NOT guess. Before adding a
+`vercel.json` `regions` entry, confirm the Supabase project region (Supabase
+Dashboard → Project Settings → General → Region) and pin the nearest Vercel
+region to it (e.g. `sin1` for `ap-southeast-1` / Singapore) to minimise
+function ↔ database round-trip latency. Pinning the wrong region would make
+latency worse, so this stays a documented TODO until the region is confirmed.
 
 ## Quality Gate
 

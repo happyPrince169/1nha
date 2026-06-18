@@ -1,11 +1,18 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { createClient } from "@/lib/supabase/server";
 import {
   getPropertyImageSignedUrls,
   R2_PENDING_PATH,
 } from "@/lib/storage/property-media";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import {
+  listProperties,
+  parsePropertyListParams,
+  type PropertyListFilters,
+  type PropertyListItem,
+} from "@/lib/services/properties";
+import { toApiError } from "@/lib/api/errors";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { buttonVariants } from "@/components/ui/button";
@@ -21,74 +28,30 @@ import {
 
 export const metadata: Metadata = { title: "Kho nguồn" };
 
-// ---------------------------------------------------------------------------
-// Allowed value sets — used to sanitise URL params before using in queries
-// ---------------------------------------------------------------------------
-const VALID_PROPERTY_TYPES = new Set([
-  "apartment", "house", "land", "shophouse", "villa", "office", "other",
-]);
-const VALID_LEGAL_STATUSES = new Set([
-  "red_book", "pink_book", "sale_contract", "hand_written", "other",
-]);
-const VALID_SORTS = new Set([
-  "newest", "price_asc", "price_desc", "area_asc", "area_desc",
-]);
+// Param parsing, the PAGE_SIZE guardrail, and the list query now live in the
+// shared properties service (src/lib/services/properties.ts) so the web page
+// and the /api/properties route stay in lockstep.
 
-// ---------------------------------------------------------------------------
-// Param parsing helpers
-// ---------------------------------------------------------------------------
-
-/** Returns a positive number or null. Rejects NaN, negative, zero. */
-function parsePositiveNumber(raw: string | undefined): number | null {
-  if (!raw || !raw.trim()) return null;
-  const n = Number(raw.trim());
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-/** Returns a trimmed non-empty string or null. */
-function parseString(raw: string | undefined): string | null {
-  const s = raw?.trim();
-  return s && s.length > 0 ? s : null;
-}
-
-// ---------------------------------------------------------------------------
-// Parsed filter shape
-// ---------------------------------------------------------------------------
-type Filters = {
-  q: string | null;
-  property_type: string | null;
-  city: string | null;
-  district: string | null;
-  price_min: number | null; // in tỷ (billions)
-  price_max: number | null;
-  area_min: number | null;  // in m²
-  area_max: number | null;
-  bedrooms: number | null;
-  legal_status: string | null;
-  sort: string;
-};
-
-function parseFilters(sp: Record<string, string | undefined>): Filters {
-  const rawSort = sp.sort?.trim() ?? "";
-  return {
-    q:             parseString(sp.q),
-    property_type: VALID_PROPERTY_TYPES.has(sp.property_type ?? "") ? (sp.property_type ?? null) : null,
-    city:          parseString(sp.city),
-    district:      parseString(sp.district),
-    price_min:     parsePositiveNumber(sp.price_min),
-    price_max:     parsePositiveNumber(sp.price_max),
-    area_min:      parsePositiveNumber(sp.area_min),
-    area_max:      parsePositiveNumber(sp.area_max),
-    bedrooms:      parsePositiveNumber(sp.bedrooms),
-    legal_status:  VALID_LEGAL_STATUSES.has(sp.legal_status ?? "") ? (sp.legal_status ?? null) : null,
-    sort:          VALID_SORTS.has(rawSort) ? rawSort : "newest",
-  };
+/**
+ * Build a property-list href that preserves every active filter/search/sort
+ * param and sets the target page. Keeps URLs shareable/bookmarkable. Page 1
+ * omits the `page` param for clean canonical URLs.
+ */
+function buildPageHref(sp: RawParams, page: number): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(sp)) {
+    if (key === "page") continue;
+    if (value) params.set(key, value);
+  }
+  if (page > 1) params.set("page", String(page));
+  const qs = params.toString();
+  return qs ? `/dashboard/properties?${qs}` : "/dashboard/properties";
 }
 
 // ---------------------------------------------------------------------------
 // Build active filter pills for display
 // ---------------------------------------------------------------------------
-function buildActivePills(f: Filters): ActiveFilterPill[] {
+function buildActivePills(f: PropertyListFilters): ActiveFilterPill[] {
   const pills: ActiveFilterPill[] = [];
 
   if (f.q)
@@ -143,6 +106,7 @@ type RawParams = {
   bedrooms?: string;
   legal_status?: string;
   sort?: string;
+  page?: string;
 };
 
 type Props = {
@@ -151,96 +115,28 @@ type Props = {
 
 export default async function PropertiesPage({ searchParams }: Props) {
   const sp = await searchParams;
-  const showArchived = sp.archived === "1";
-  const filters = parseFilters(sp);
+  const params = parsePropertyListParams(sp);
+  const { filters, showArchived, page } = params;
   const activePills = buildActivePills(filters);
   const hasActiveFilters = activePills.length > 0;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Authenticated, workspace-scoped context (proxy already gates /dashboard).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
-
-  // ---------------------------------------------------------------------------
-  // Build Supabase query with all active filters
-  // ---------------------------------------------------------------------------
-  let query = supabase
-    .from("properties")
-    .select("id,title,district,price,area,status,created_at")
-    .eq("user_id", user.id);
-
-  // Archived tab
-  if (showArchived) {
-    query = query.eq("status", "archived");
-  } else {
-    query = query.neq("status", "archived");
+  // Property list comes from the shared service: organization-scoped, paginated
+  // (PAGE_SIZE + 1 → hasNextPage), filters/search/sort preserved.
+  let properties: PropertyListItem[] = [];
+  let hasNextPage = false;
+  let errorMsg: string | null = null;
+  try {
+    const result = await listProperties(ctx, params);
+    properties = result.items;
+    hasNextPage = result.hasNextPage;
+  } catch (err) {
+    errorMsg = toApiError(err).message;
   }
-
-  // Free-text: ilike across multiple columns via .or()
-  if (filters.q) {
-    const pattern = `%${filters.q}%`;
-    query = query.or(
-      [
-        `title.ilike.${pattern}`,
-        `district.ilike.${pattern}`,
-        `ward.ilike.${pattern}`,
-        `street.ilike.${pattern}`,
-        `description.ilike.${pattern}`,
-        `strengths.ilike.${pattern}`,
-      ].join(",")
-    );
-  }
-
-  if (filters.property_type)
-    query = query.eq("property_type", filters.property_type);
-
-  if (filters.legal_status)
-    query = query.eq("legal_status", filters.legal_status);
-
-  // City: case-insensitive substring match (brokers type inconsistently)
-  if (filters.city)
-    query = query.ilike("city", `%${filters.city}%`);
-
-  if (filters.district)
-    query = query.ilike("district", `%${filters.district}%`);
-
-  // Price: params are in tỷ (billion VND), DB stores raw VND
-  if (filters.price_min !== null)
-    query = query.gte("price", filters.price_min * 1_000_000_000);
-  if (filters.price_max !== null)
-    query = query.lte("price", filters.price_max * 1_000_000_000);
-
-  // Area in m² (DB stores m² directly)
-  if (filters.area_min !== null)
-    query = query.gte("area", filters.area_min);
-  if (filters.area_max !== null)
-    query = query.lte("area", filters.area_max);
-
-  // Bedrooms: “minimum N bedrooms”
-  if (filters.bedrooms !== null)
-    query = query.gte("bedrooms", filters.bedrooms);
-
-  // Sort
-  switch (filters.sort) {
-    case "price_asc":
-      query = query.order("price", { ascending: true });
-      break;
-    case "price_desc":
-      query = query.order("price", { ascending: false });
-      break;
-    case "area_asc":
-      query = query.order("area", { ascending: true });
-      break;
-    case "area_desc":
-      query = query.order("area", { ascending: false });
-      break;
-    default:
-      query = query.order("created_at", { ascending: false });
-  }
-
-  const { data: properties, error } = await query;
+  const hasPrevPage = page > 1;
 
   // ---------------------------------------------------------------------------
   // Thumbnail pipeline — single batch, no N+1
@@ -250,12 +146,12 @@ export default async function PropertiesPage({ searchParams }: Props) {
   if (properties && properties.length > 0) {
     const propertyIds = properties.map((p) => p.id);
 
-    const { data: imageRows } = await supabase
+    const { data: imageRows } = await ctx.supabase
       .from("property_images")
       .select(
         "id, property_id, storage_provider, storage_path, original_key, thumbnail_key, preview_key"
       )
-      .eq("user_id", user.id)
+      .eq("user_id", ctx.userId)
       .in("property_id", propertyIds)
       .neq("storage_path", "__pending__")
       .neq("storage_path", R2_PENDING_PATH)
@@ -276,7 +172,7 @@ export default async function PropertiesPage({ searchParams }: Props) {
       // Batched per provider; prefer thumbnail keys for list thumbnails.
       const urlById = await getPropertyImageSignedUrls(
         Array.from(firstByProperty.values()),
-        supabase,
+        ctx.supabase,
         { variant: "thumbnail" }
       );
 
@@ -346,14 +242,14 @@ export default async function PropertiesPage({ searchParams }: Props) {
       <PropertyFilters activeFilters={activePills} basePath={basePath} />
 
       {/* Query error */}
-      {error && (
+      {errorMsg && (
         <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error.message}
+          {errorMsg}
         </p>
       )}
 
-      {/* Empty states */}
-      {!error && (!properties || properties.length === 0) && (
+      {/* Empty states — only on the first page (page 2+ empty is handled below) */}
+      {!errorMsg && page === 1 && (!properties || properties.length === 0) && (
         hasActiveFilters ? (
           // Filtered empty state
           <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed border-border bg-muted/20 px-6 py-10 text-center">
@@ -419,7 +315,7 @@ export default async function PropertiesPage({ searchParams }: Props) {
       )}
 
       {/* Result count when filters are active */}
-      {!error && properties && properties.length > 0 && hasActiveFilters && (
+      {!errorMsg && properties && properties.length > 0 && hasActiveFilters && (
         <p className="text-xs text-muted-foreground">
           {properties.length} căn phù hợp
         </p>
@@ -440,6 +336,49 @@ export default async function PropertiesPage({ searchParams }: Props) {
           />
         ))}
       </div>
+
+      {/* Page 2+ with no rows: the user paged past the end */}
+      {!errorMsg && page > 1 && properties && properties.length === 0 && (
+        <p className="text-center text-sm text-muted-foreground">
+          Không còn căn nào ở trang này.
+        </p>
+      )}
+
+      {/* Pagination controls */}
+      {!errorMsg && (hasPrevPage || hasNextPage) && (
+        <nav
+          aria-label="Phân trang"
+          className="flex items-center justify-between gap-2 pt-1"
+        >
+          {hasPrevPage ? (
+            <Link
+              href={buildPageHref(sp, page - 1)}
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            >
+              ← Trang trước
+            </Link>
+          ) : (
+            <span className={cn(buttonVariants({ variant: "outline", size: "sm" }), "pointer-events-none opacity-40")}>
+              ← Trang trước
+            </span>
+          )}
+
+          <span className="text-xs text-muted-foreground">Trang {page}</span>
+
+          {hasNextPage ? (
+            <Link
+              href={buildPageHref(sp, page + 1)}
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            >
+              Trang sau →
+            </Link>
+          ) : (
+            <span className={cn(buttonVariants({ variant: "outline", size: "sm" }), "pointer-events-none opacity-40")}>
+              Trang sau →
+            </span>
+          )}
+        </nav>
+      )}
     </div>
   );
 }

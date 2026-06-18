@@ -13,6 +13,10 @@
 // future work (thumbnails, video) and a full R2 migration stay contained.
 // ---------------------------------------------------------------------------
 
+// Build-time guard: importing this module from a Client Component is a hard
+// error. R2 credentials + the AWS SDK must never reach the browser bundle.
+import "server-only";
+
 import {
   S3Client,
   PutObjectCommand,

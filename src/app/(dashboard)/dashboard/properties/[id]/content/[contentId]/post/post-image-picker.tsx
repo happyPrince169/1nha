@@ -9,7 +9,10 @@ import { cn } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 export type PickerImage = {
   id: string;
-  signedUrl: string;
+  /** Thumbnail signed URL — used ONLY for the preview grid <img>. */
+  thumbnailUrl: string;
+  /** Original/main signed URL — used ONLY for open/download/copy actions. */
+  originalUrl: string;
   altText: string | null;
   caption: string | null;
   isCover: boolean;
@@ -137,7 +140,7 @@ function ImageActionButtons({
   // Infer mime type from the signed URL query string or fall back to jpeg
   function getMimeType(): string {
     try {
-      const u = new URL(image.signedUrl);
+      const u = new URL(image.originalUrl);
       const ct = u.searchParams.get("Content-Type") ?? u.searchParams.get("content-type");
       if (ct && ct.startsWith("image/")) return ct;
     } catch {
@@ -166,7 +169,7 @@ function ImageActionButtons({
           onClick={() =>
             onAction(image.id, () =>
               downloadImage(
-                image.signedUrl,
+                image.originalUrl,
                 buildFilename(image.id, getMimeType())
               )
             )
@@ -182,7 +185,7 @@ function ImageActionButtons({
           aria-label="Sao chép ảnh vào clipboard"
           className={btnBase}
           onClick={() =>
-            onAction(image.id, () => copyImageToClipboard(image.signedUrl))
+            onAction(image.id, () => copyImageToClipboard(image.originalUrl))
           }
         >
           Sao chép
@@ -195,7 +198,7 @@ function ImageActionButtons({
           aria-label="Mở ảnh trong tab mới"
           className={btnBase}
           onClick={() =>
-            window.open(image.signedUrl, "_blank", "noopener,noreferrer")
+            window.open(image.originalUrl, "_blank", "noopener,noreferrer")
           }
         >
           Mở ảnh
@@ -318,7 +321,7 @@ export function PostImagePicker({ images, propertyId }: Props) {
       // Infer mime type from URL query params or fall back
       let mimeType = "image/jpeg";
       try {
-        const u = new URL(img.signedUrl);
+        const u = new URL(img.originalUrl);
         const ct =
           u.searchParams.get("Content-Type") ??
           u.searchParams.get("content-type");
@@ -328,7 +331,7 @@ export function PostImagePicker({ images, propertyId }: Props) {
       }
 
       try {
-        await downloadImage(img.signedUrl, buildFilename(img.id, mimeType));
+        await downloadImage(img.originalUrl, buildFilename(img.id, mimeType));
       } catch {
         failed++;
       }
@@ -479,9 +482,10 @@ export function PostImagePicker({ images, propertyId }: Props) {
                     : "opacity-70 hover:opacity-100"
                 )}
               >
+                {/* Preview uses the thumbnail — never the full-res original. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={img.signedUrl}
+                  src={img.thumbnailUrl}
                   alt={img.altText ?? img.caption ?? "Ảnh căn nhà"}
                   className="h-24 w-full object-cover"
                 />

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { SignUpForm } from "./sign-up-form";
 import {
@@ -21,11 +22,23 @@ export default function SignUpPage() {
         </p>
       </div>
 
+      {/* Phone-first nudge — phone OTP both signs up and signs in. */}
+      <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm leading-relaxed">
+        Bạn có thể đăng ký/đăng nhập nhanh bằng số điện thoại. Email vẫn có thể
+        dùng làm phương án dự phòng.{" "}
+        <Link
+          href="/sign-in"
+          className="font-medium text-foreground underline-offset-2 hover:underline"
+        >
+          Dùng số điện thoại →
+        </Link>
+      </div>
+
       <Card>
         <CardHeader>
-          <CardTitle>Tạo tài khoản 1nha</CardTitle>
+          <CardTitle>Tạo tài khoản bằng email</CardTitle>
           <CardDescription>
-            Đăng ký bằng email và mật khẩu để bắt đầu.
+            Đăng ký bằng email và mật khẩu (phương án dự phòng).
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -108,7 +108,7 @@ export async function generatePropertyContent(
   const { data: property, error: propError } = await supabase
     .from("properties")
     .select(
-      "id,title,property_type,city,district,ward,street,price,area,bedrooms,bathrooms,house_direction,frontage,alley_width,legal_status,description,strengths,weaknesses,owner_note,planning_note"
+      "id,organization_id,title,property_type,city,district,ward,street,price,area,bedrooms,bathrooms,house_direction,frontage,alley_width,legal_status,description,strengths,weaknesses,owner_note,planning_note"
     )
     .eq("id", propertyId)
     .eq("user_id", user.id)
@@ -145,6 +145,9 @@ export async function generatePropertyContent(
     .insert({
       user_id: user.id,          // always server-set
       property_id: propertyId,   // always server-set
+      // Content belongs to the same workspace as its property (Phase 2A).
+      organization_id: property.organization_id,
+      created_by: user.id,
       platform,
       tone,
       content_type,

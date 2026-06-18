@@ -10,6 +10,7 @@
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import { normalizeVietnamesePhone } from "@/lib/auth/phone";
 
 // ---------------------------------------------------------------------------
 // Shared types + helpers
@@ -18,6 +19,15 @@ export type AuthFormState = {
   error: string | null;
   /** Set by flows that show an inline success message instead of redirecting. */
   success?: boolean;
+};
+
+/** State for the phone OTP flow (send → verify). */
+export type PhoneOtpState = {
+  error: string | null;
+  /** Normalized E.164 phone the OTP was sent to (echoed for the verify step). */
+  phone: string | null;
+  /** True once an OTP has been dispatched, so the UI advances to the code step. */
+  otpSent?: boolean;
 };
 
 const MSG = {
@@ -232,6 +242,95 @@ export async function sendMagicLink(
   if (error) return { error: MSG.generic };
 
   redirect("/sign-in?status=check_email");
+}
+
+// ---------------------------------------------------------------------------
+// Phone OTP — primary login UX (Vietnamese mobile + SMS OTP via Supabase)
+//
+// Uses Supabase Phone Auth directly. The SMS provider must be configured in the
+// Supabase dashboard (see docs/ARCHITECTURE.md). We never generate, store, or
+// log OTP codes — Supabase owns the OTP lifecycle.
+// ---------------------------------------------------------------------------
+const PHONE_MSG = {
+  otpSendFailed: "Không thể gửi mã OTP. Vui lòng thử lại sau.",
+  otpInvalid: "Mã xác thực không đúng hoặc đã hết hạn. Vui lòng thử lại.",
+  otpFormat: "Mã OTP gồm 6 chữ số.",
+} as const;
+
+/**
+ * sendPhoneOtp — normalize the phone to E.164 and ask Supabase to send an SMS
+ * OTP. Never reveals whether the number already has an account (Supabase
+ * creates the user on first verify by default). The normalized phone is echoed
+ * back so the verify step + "resend" target the exact same number.
+ */
+export async function sendPhoneOtp(
+  _prev: PhoneOtpState,
+  formData: FormData
+): Promise<PhoneOtpState> {
+  const normalized = normalizeVietnamesePhone(readString(formData, "phone"));
+  if (!normalized.ok) return { error: normalized.error, phone: null };
+
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithOtp({
+    phone: normalized.e164,
+  });
+
+  if (error) {
+    // Keep the (valid) phone so the user can simply retry. Do not echo provider
+    // internals or hint at account existence.
+    return { error: PHONE_MSG.otpSendFailed, phone: normalized.e164, otpSent: false };
+  }
+
+  return { error: null, phone: normalized.e164, otpSent: true };
+}
+
+/**
+ * verifyPhoneOtp — validate the 6-digit code against Supabase. On success a
+ * session cookie is established; we best-effort ensure a user_profiles row
+ * (never overwriting an existing one) and enter the dashboard. The personal
+ * workspace is created by the auth.users trigger (Phase 2A), independent of
+ * whether the user has an email.
+ */
+export async function verifyPhoneOtp(
+  _prev: PhoneOtpState,
+  formData: FormData
+): Promise<PhoneOtpState> {
+  const normalized = normalizeVietnamesePhone(readString(formData, "phone"));
+  if (!normalized.ok) return { error: normalized.error, phone: null };
+
+  const token = readString(formData, "token");
+  if (!/^\d{6}$/.test(token)) {
+    return { error: PHONE_MSG.otpFormat, phone: normalized.e164, otpSent: true };
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.verifyOtp({
+    phone: normalized.e164,
+    token,
+    type: "sms",
+  });
+
+  if (error || !data.user) {
+    return { error: PHONE_MSG.otpInvalid, phone: normalized.e164, otpSent: true };
+  }
+
+  // Best-effort profile row for phone-first users (email may be null). Use
+  // ignoreDuplicates so an existing profile (e.g. an email user adding phone
+  // login) is never overwritten. A failure here must not block sign-in.
+  try {
+    await supabase.from("user_profiles").upsert(
+      {
+        user_id: data.user.id,
+        display_name: null,
+        phone: normalized.e164,
+      },
+      { onConflict: "user_id", ignoreDuplicates: true }
+    );
+  } catch {
+    // Ignore — profile can be completed later from the account page.
+  }
+
+  redirect("/dashboard");
 }
 
 // ---------------------------------------------------------------------------

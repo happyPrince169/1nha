@@ -132,10 +132,16 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   /*
-   * Run on every path except Next.js internals and common static assets.
-   * The negative lookahead prevents the proxy from blocking CSS/JS/images.
+   * Only run the proxy where its auth logic is actually needed:
+   *   • /dashboard/**  → block unauthenticated users (+ refresh session cookies)
+   *   • /sign-in       → bounce already-authenticated users to the dashboard
+   *
+   * Every other path (public landing, /pricing, /sign-up, /forgot-password,
+   * /reset-password, the /api/auth/callback handler, and ALL static assets /
+   * _next internals / images) is skipped — so the expensive supabase.auth
+   * .getUser() JWT-validation call (previously ~1s+ on every request) no longer
+   * runs on pages that don't gate on auth. Those routes manage their own
+   * Supabase session via the server client when they need one.
    */
-  matcher: [
-    "/((?!_next/static|_next/image|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
-  ],
+  matcher: ["/dashboard/:path*", "/sign-in"],
 };

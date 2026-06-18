@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { trackEvent } from "@/lib/usage";
 import { analyzeContentStyle } from "@/lib/ai/analyze-content-style";
+import { getCurrentWorkspace } from "@/lib/workspace/current";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -48,6 +49,9 @@ export async function createStyleProfile(
   const { supabase, user } = await getAuthenticatedUser();
   if (!user) return { error: "Bạn cần đăng nhập." };
 
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "Không tìm thấy không gian làm việc." };
+
   // --- Input extraction and validation -------------------------------------
   const name = (formData.get("name") as string | null)?.trim() ?? "";
   if (!name) return { error: "Tên văn phong không được để trống." };
@@ -82,6 +86,9 @@ export async function createStyleProfile(
     .from("content_style_profiles")
     .insert({
       user_id: user.id,
+      // Workspace scoping (Phase 2A); DB trigger backfills as a safety net.
+      organization_id: workspace.organizationId,
+      created_by: user.id,
       name,
       platform,
       sample_text: rawSample,
