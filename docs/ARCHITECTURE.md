@@ -1012,6 +1012,35 @@ For image-heavy flows:
 - Lazy-load images.
 ```
 
+## Quick Add Image OCR
+
+`/dashboard/properties/quick-add` (image mode) reads a property listing photo /
+screenshot, OCRs the text via OpenAI vision, then reuses the text extractor.
+
+Real phone-camera photos broke this: they are large (3–12 MB) and often HEIC,
+so the raw file exceeded the Server Action body limit (1 MB default) and
+surfaced as a generic "server error". Internet images / screenshots are small,
+so they kept working.
+
+Handling now:
+
+```text
+- Client preprocesses every OCR image before upload
+  (src/lib/images/client-image-processing.ts → processImageForOcr):
+    • resize to 1800px long edge, JPEG q0.84, strip metadata via canvas
+    • retry at 1400px / q0.78 if still > 2.5 MB
+    • friendly "ảnh quá nặng" message if still too large
+- OCR accepts optimized JPEG / PNG / WebP only.
+- HEIC/HEIF: converted client-side when the browser can decode it; otherwise a
+  friendly Vietnamese guidance message (no raw file is submitted, no crash).
+- Server Action body limit raised to 6 MB (next.config.ts) as headroom for the
+  optimized JPEG.
+- Server action re-validates MIME/size, rejects HEIC + oversized with friendly
+  messages, logs only file metadata (name/type/size) — never image bytes.
+- No R2 / gallery upload behavior changed; the gallery flow keeps using
+  createMainAndThumbnailImages and direct R2 upload.
+```
+
 ### Scale guardrails (Phase 1)
 
 ```text

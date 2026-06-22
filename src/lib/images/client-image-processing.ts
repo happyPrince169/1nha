@@ -39,6 +39,14 @@ const ERR_DECODE =
 const ERR_TOO_LARGE = "Ảnh quá lớn. Vui lòng chọn ảnh dưới 20MB.";
 const ERR_PROCESS = "Không xử lý được ảnh. Vui lòng thử ảnh khác.";
 
+// OCR-specific messages.
+export const ERR_OCR_NOT_IMAGE =
+  "Tệp bạn chọn không phải ảnh. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.";
+export const ERR_OCR_TOO_HEAVY =
+  "Ảnh quá nặng. Vui lòng chụp lại gần hơn hoặc chọn ảnh nhẹ hơn.";
+export const ERR_OCR_HEIC_UNSUPPORTED =
+  "Ảnh HEIC từ iPhone chưa được hỗ trợ. Vui lòng đổi sang JPG trong cài đặt camera hoặc chụp màn hình rồi tải lại.";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -199,4 +207,78 @@ export async function createMainAndThumbnailImages(
   });
 
   return { main, thumbnail };
+}
+
+// ---------------------------------------------------------------------------
+// processImageForOcr — prepare a phone photo / screenshot for server OCR
+//
+// Real phone-camera photos are large (often 3–12 MB) and frequently HEIC, which
+// either exceeds the Server Action body limit or is an unsupported MIME type.
+// We resize + re-encode to a small JPEG entirely on the client so the payload
+// that reaches the OCR Server Action stays small and always a supported type.
+//
+// Quality matters: listing screenshots/photos must stay readable for OCR, so we
+// keep a generous long edge (1800px) before falling back to a smaller pass.
+// ---------------------------------------------------------------------------
+
+/** OCR target: keep the uploaded JPEG comfortably small for Server Actions. */
+export const OCR_TARGET_MAX_BYTES = 2.5 * 1024 * 1024; // 2.5 MB
+
+// First pass keeps text readable; second pass trades a little quality for size.
+const OCR_PASS_1 = { maxLongEdge: 1800, quality: 0.84 };
+const OCR_PASS_2 = { maxLongEdge: 1400, quality: 0.78 };
+
+/** True when a file looks like HEIC/HEIF by MIME type or extension. */
+function looksLikeHeic(file: File): boolean {
+  const type = file.type.toLowerCase();
+  if (type === "image/heic" || type === "image/heif") return true;
+  return /\.(heic|heif)$/i.test(file.name);
+}
+
+/** True when a selection plausibly is an image we can try to decode. */
+function looksLikeImage(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  // Some browsers report an empty MIME type for camera files — fall back to ext.
+  return /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif)$/i.test(file.name);
+}
+
+export async function processImageForOcr(file: File): Promise<ProcessedImage> {
+  if (!looksLikeImage(file)) {
+    throw new Error(ERR_OCR_NOT_IMAGE);
+  }
+  if (file.size > MAX_INPUT_BYTES) {
+    throw new Error(ERR_OCR_TOO_HEAVY);
+  }
+
+  const heic = looksLikeHeic(file);
+
+  // First pass — high readability. createImageBitmap is what decodes HEIC when
+  // the browser supports it; if it throws on a HEIC file, the browser can't
+  // decode it and we surface a HEIC-specific message instead of a generic one.
+  let processed: ProcessedImage;
+  try {
+    processed = await resizeImageFile({
+      file,
+      maxLongEdge: OCR_PASS_1.maxLongEdge,
+      quality: OCR_PASS_1.quality,
+      outputMimeType: "image/jpeg",
+    });
+  } catch (err) {
+    if (heic) throw new Error(ERR_OCR_HEIC_UNSUPPORTED);
+    throw err instanceof Error ? err : new Error(ERR_PROCESS);
+  }
+
+  if (processed.sizeBytes <= OCR_TARGET_MAX_BYTES) return processed;
+
+  // Second pass — smaller + slightly lower quality.
+  const second = await resizeImageFile({
+    file,
+    maxLongEdge: OCR_PASS_2.maxLongEdge,
+    quality: OCR_PASS_2.quality,
+    outputMimeType: "image/jpeg",
+  });
+
+  if (second.sizeBytes <= OCR_TARGET_MAX_BYTES) return second;
+
+  throw new Error(ERR_OCR_TOO_HEAVY);
 }

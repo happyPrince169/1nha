@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { startTransition, useActionState, useRef, useState } from "react";
 
 import {
   extractPropertyFromTextAction,
@@ -8,6 +8,10 @@ import {
   type QuickAddState,
   type ImageExtractState,
 } from "./actions";
+import {
+  processImageForOcr,
+  ERR_OCR_NOT_IMAGE,
+} from "@/lib/images/client-image-processing";
 import { createProperty } from "../new/actions";
 import { PropertyForm } from "../property-form";
 import type { PropertyFormDefaults } from "../property-form";
@@ -112,54 +116,119 @@ function TextInputStep({
 
 // ---------------------------------------------------------------------------
 // Step 1b — image upload input
+//
+// Phone-camera photos are large (often 3–12 MB) and frequently HEIC, which the
+// Server Action body limit / vision API would reject as a raw server error.
+// We optimize each image to a small JPEG on the client BEFORE submitting, then
+// dispatch the processed file to the OCR action. HEIC/oversized cases surface
+// as friendly Vietnamese guidance instead of a server crash.
 // ---------------------------------------------------------------------------
-const ACCEPTED = "image/jpeg,image/png,image/webp";
-const MAX_MB = 5;
-const MAX_BYTES = MAX_MB * 1024 * 1024;
+// "image/*" so phone cameras/galleries (incl. HEIC) can be selected; the client
+// preprocessor validates and converts, with the server repeating the checks.
+const ACCEPTED = "image/*";
+
+function formatMB(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function ImageInputStep({
   isPending,
-  error,
+  formAction,
+  serverError,
 }: {
   isPending: boolean;
-  error: string | null;
+  formAction: (formData: FormData) => void;
+  serverError: string | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [clientError, setClientError] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processedNote, setProcessedNote] = useState<string | null>(null);
+
+  const busy = isPending || isProcessing;
+
+  function resetPreview(next: string | null) {
+    setPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return next;
+    });
+  }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     setClientError(null);
-    const file = e.target.files?.[0];
-    if (!file) {
-      setPreview(null);
+    setProcessedNote(null);
+    const selected = e.target.files?.[0] ?? null;
+
+    if (!selected) {
+      setFile(null);
+      resetPreview(null);
       return;
     }
 
-    // Client-side guard (server repeats the check)
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      setClientError("Định dạng không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP.");
+    // Accept anything that plausibly is an image; preprocessing does the real
+    // validation/conversion. Empty MIME types are common for camera files.
+    const plausible =
+      selected.type.startsWith("image/") ||
+      /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif)$/i.test(selected.name);
+    if (!plausible) {
+      setClientError(ERR_OCR_NOT_IMAGE);
+      setFile(null);
+      resetPreview(null);
       e.target.value = "";
-      setPreview(null);
-      return;
-    }
-    if (file.size > MAX_BYTES) {
-      setClientError(
-        `Ảnh quá lớn (${(file.size / 1024 / 1024).toFixed(1)} MB). Giới hạn ${MAX_MB} MB.`
-      );
-      e.target.value = "";
-      setPreview(null);
       return;
     }
 
-    const url = URL.createObjectURL(file);
-    setPreview(url);
+    setFile(selected);
+    // Preview may not render for HEIC on some browsers — that's fine, the
+    // filename chip below still confirms the selection.
+    try {
+      resetPreview(URL.createObjectURL(selected));
+    } catch {
+      resetPreview(null);
+    }
   }
 
-  const displayError = clientError ?? error;
+  function clearSelection() {
+    setFile(null);
+    resetPreview(null);
+    setClientError(null);
+    setProcessedNote(null);
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!file || busy) return;
+
+    setClientError(null);
+    setProcessedNote(null);
+    setIsProcessing(true);
+
+    try {
+      const processed = await processImageForOcr(file);
+      setProcessedNote(
+        `${processed.file.name} · ${formatMB(processed.sizeBytes)}`
+      );
+
+      const formData = new FormData();
+      formData.append("image", processed.file);
+      // Dispatch the optimized image to the Server Action.
+      startTransition(() => formAction(formData));
+    } catch (err) {
+      setClientError(
+        err instanceof Error ? err.message : "Không xử lý được ảnh này."
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  const displayError = clientError ?? serverError;
 
   return (
-    <div className="flex flex-col gap-4">
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       {displayError && <FormError>{displayError}</FormError>}
 
       <Card>
@@ -169,9 +238,9 @@ function ImageInputStep({
         <CardContent className="flex flex-col gap-4">
           {/* Drop zone / file picker */}
           <div
-            onClick={() => !isPending && inputRef.current?.click()}
-            onKeyDown={(e) => {
-              if ((e.key === "Enter" || e.key === " ") && !isPending)
+            onClick={() => !busy && inputRef.current?.click()}
+            onKeyDown={(ev) => {
+              if ((ev.key === "Enter" || ev.key === " ") && !busy)
                 inputRef.current?.click();
             }}
             role="button"
@@ -181,7 +250,7 @@ function ImageInputStep({
               "flex min-h-[160px] cursor-pointer flex-col items-center justify-center",
               "rounded-lg border-2 border-dashed transition-colors outline-none",
               "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-              isPending
+              busy
                 ? "cursor-not-allowed border-border opacity-50"
                 : "border-border hover:border-primary/60 hover:bg-muted/40",
             ].join(" ")}
@@ -201,7 +270,9 @@ function ImageInputStep({
                 <p className="text-sm font-medium">
                   Nhấn để chọn ảnh hoặc kéo thả vào đây
                 </p>
-                <p className="text-xs">JPEG · PNG · WebP · tối đa {MAX_MB} MB</p>
+                <p className="text-xs">
+                  Ảnh chụp từ điện thoại, ảnh chụp màn hình, JPG · PNG · WebP
+                </p>
               </div>
             )}
           </div>
@@ -212,20 +283,32 @@ function ImageInputStep({
             name="image"
             type="file"
             accept={ACCEPTED}
-            disabled={isPending}
+            disabled={busy}
             onChange={handleFileChange}
             className="sr-only"
           />
 
-          {preview && !isPending && (
+          {/* Selected-file chip + processing status */}
+          {file && (
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <p className="truncate">
+                📎 {file.name} · {formatMB(file.size)}
+              </p>
+              {isProcessing && <p>⚙️ Đang tối ưu ảnh…</p>}
+              {isPending && <p>🔍 Đang đọc ảnh…</p>}
+              {!busy && processedNote && (
+                <p className="text-emerald-600 dark:text-emerald-400">
+                  ✓ Đã tối ưu: {processedNote}
+                </p>
+              )}
+            </div>
+          )}
+
+          {file && !busy && (
             <button
               type="button"
-              onClick={() => {
-                setPreview(null);
-                setClientError(null);
-                if (inputRef.current) inputRef.current.value = "";
-              }}
-              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onClick={clearSelection}
+              className="self-start text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
               Xoá ảnh đã chọn
             </button>
@@ -241,11 +324,15 @@ function ImageInputStep({
       <Button
         type="submit"
         className="h-12 w-full text-base"
-        disabled={isPending || !!clientError}
+        disabled={busy || !file}
       >
-        {isPending ? "Đang đọc ảnh…" : "✨ Trích xuất từ ảnh"}
+        {isProcessing
+          ? "Đang tối ưu ảnh…"
+          : isPending
+            ? "Đang đọc ảnh…"
+            : "✨ Trích xuất từ ảnh"}
       </Button>
-    </div>
+    </form>
   );
 }
 
@@ -437,9 +524,11 @@ function ImageQuickAdd() {
   }
 
   return (
-    <form action={formAction}>
-      <ImageInputStep isPending={isPending} error={state.error} />
-    </form>
+    <ImageInputStep
+      isPending={isPending}
+      formAction={formAction}
+      serverError={state.error}
+    />
   );
 }
 

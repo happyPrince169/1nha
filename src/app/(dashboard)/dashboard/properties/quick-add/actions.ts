@@ -17,7 +17,28 @@ const ALLOWED_MIME_TYPES: SupportedImageMime[] = [
   "image/png",
   "image/webp",
 ];
+const HEIC_MIME_TYPES = ["image/heic", "image/heif"];
+// The client preprocesses to a small JPEG (target ≤ 2.5 MB); this is a
+// defense-in-depth cap kept under the Server Action body limit (6 MB).
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+/**
+ * Safe server-side log for OCR upload diagnostics. Logs only file metadata and
+ * a high-level code — never the image bytes / base64 or any user content.
+ */
+function logOcrIssue(
+  code: string,
+  meta: { name?: string; type?: string; size?: number }
+) {
+  console.warn(
+    `[quick-add-ocr] ${code}`,
+    JSON.stringify({
+      name: meta.name,
+      type: meta.type,
+      sizeBytes: meta.size,
+    })
+  );
+}
 
 // ---------------------------------------------------------------------------
 // State shapes
@@ -129,8 +150,23 @@ export async function extractPropertyFromImageAction(
     };
   }
 
+  const fileMeta = { name: file.name, type: file.type, size: file.size };
+
+  // HEIC/HEIF — should be converted client-side; reject explicitly if it reaches
+  // the server so the user gets guidance instead of a vision-API failure.
+  if (HEIC_MIME_TYPES.includes(file.type.toLowerCase())) {
+    logOcrIssue("reject_heic", fileMeta);
+    return {
+      draft: null,
+      rawText: null,
+      error:
+        "Ảnh HEIC chưa được hỗ trợ. Vui lòng dùng JPG/PNG hoặc ảnh chụp màn hình.",
+    };
+  }
+
   // Validate MIME type
   if (!ALLOWED_MIME_TYPES.includes(file.type as SupportedImageMime)) {
+    logOcrIssue("reject_mime", fileMeta);
     return {
       draft: null,
       rawText: null,
@@ -140,10 +176,12 @@ export async function extractPropertyFromImageAction(
 
   // Validate file size
   if (file.size > MAX_FILE_SIZE_BYTES) {
+    logOcrIssue("reject_size", fileMeta);
     return {
       draft: null,
       rawText: null,
-      error: "Ảnh quá lớn. Vui lòng chọn ảnh dưới 5 MB.",
+      error:
+        "Ảnh quá nặng để đọc tự động. Vui lòng chọn ảnh nhẹ hơn hoặc chụp lại rõ phần tin đăng.",
     };
   }
 
@@ -153,6 +191,7 @@ export async function extractPropertyFromImageAction(
     const arrayBuffer = await file.arrayBuffer();
     imageBase64 = Buffer.from(arrayBuffer).toString("base64");
   } catch {
+    logOcrIssue("read_failed", fileMeta);
     return {
       draft: null,
       rawText: null,
@@ -168,11 +207,16 @@ export async function extractPropertyFromImageAction(
       file.type as SupportedImageMime
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Lỗi không xác định.";
+    logOcrIssue("vision_failed", {
+      ...fileMeta,
+      // include only the high-level error name/status, never the payload
+      type: err instanceof Error ? err.message.slice(0, 120) : undefined,
+    });
     return {
       draft: null,
       rawText: null,
-      error: `Không thể đọc văn bản từ ảnh: ${message}`,
+      error:
+        "Không thể đọc văn bản từ ảnh lúc này. Vui lòng thử lại hoặc chọn ảnh rõ hơn.",
     };
   }
 
