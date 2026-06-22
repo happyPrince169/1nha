@@ -41,11 +41,11 @@ const ERR_PROCESS = "Không xử lý được ảnh. Vui lòng thử ảnh khác
 
 // OCR-specific messages.
 export const ERR_OCR_NOT_IMAGE =
-  "Tệp bạn chọn không phải ảnh. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.";
+  "File này không phải ảnh. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.";
 export const ERR_OCR_TOO_HEAVY =
-  "Ảnh quá nặng. Vui lòng chụp lại gần hơn hoặc chọn ảnh nhẹ hơn.";
+  "Ảnh quá nặng để đọc tự động. Vui lòng chụp lại rõ phần tin đăng hoặc chọn ảnh nhẹ hơn.";
 export const ERR_OCR_HEIC_UNSUPPORTED =
-  "Ảnh HEIC từ iPhone chưa được hỗ trợ. Vui lòng đổi sang JPG trong cài đặt camera hoặc chụp màn hình rồi tải lại.";
+  "Ảnh HEIC từ iPhone chưa được hỗ trợ trên trình duyệt này. Vui lòng chụp màn hình hoặc đổi camera sang JPG.";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -109,6 +109,69 @@ function canvasToBlob(
 }
 
 // ---------------------------------------------------------------------------
+// Decode — robust two-strategy image decode
+//
+// createImageBitmap is fast and applies EXIF orientation, but it throws on some
+// perfectly valid phone-camera JPEGs (the `imageOrientation` option, progressive
+// / CMYK encoding, or codec quirks in specific browsers). When it fails we fall
+// back to an <img> element, which decodes a broader set of files. The <img>
+// path relies on the browser's default `image-orientation: from-image`, which
+// modern browsers honor when drawing to canvas; in rare older engines a photo
+// could be rotated, but a correctly-rotated successful OCR beats a hard crash.
+// ---------------------------------------------------------------------------
+type DecodedImage = {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+  cleanup: () => void;
+};
+
+function loadHTMLImageFromUrl(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error(ERR_DECODE));
+    img.src = url;
+  });
+}
+
+async function decodeImage(file: File): Promise<DecodedImage> {
+  // Strategy 1 — createImageBitmap (fast, EXIF-aware).
+  try {
+    const bitmap = await createImageBitmap(file, {
+      imageOrientation: "from-image",
+    });
+    return {
+      source: bitmap,
+      width: bitmap.width,
+      height: bitmap.height,
+      cleanup: () => bitmap.close(),
+    };
+  } catch {
+    // fall through to the <img> strategy
+  }
+
+  // Strategy 2 — HTMLImageElement via object URL.
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadHTMLImageFromUrl(url);
+    if (!img.naturalWidth || !img.naturalHeight) {
+      throw new Error(ERR_DECODE);
+    }
+    return {
+      source: img,
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      cleanup: () => URL.revokeObjectURL(url),
+    };
+  } catch (err) {
+    URL.revokeObjectURL(url);
+    throw err instanceof Error ? err : new Error(ERR_DECODE);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // resizeImageFile — resize (if needed) + compress a single image
 // ---------------------------------------------------------------------------
 export async function resizeImageFile(
@@ -117,18 +180,11 @@ export async function resizeImageFile(
   const { file, maxLongEdge, quality } = params;
   const outputMimeType: OutputMimeType = params.outputMimeType ?? "image/jpeg";
 
-  let bitmap: ImageBitmap;
-  try {
-    // imageOrientation: "from-image" applies EXIF orientation so phone photos
-    // are not rotated/mirrored after processing.
-    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-  } catch {
-    throw new Error(ERR_DECODE);
-  }
+  const decoded = await decodeImage(file);
 
   try {
-    const srcW = bitmap.width;
-    const srcH = bitmap.height;
+    const srcW = decoded.width;
+    const srcH = decoded.height;
     const longEdge = Math.max(srcW, srcH);
 
     // Preserve aspect ratio; only shrink, never upscale.
@@ -149,7 +205,7 @@ export async function resizeImageFile(
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, dstW, dstH);
     }
-    ctx.drawImage(bitmap, 0, 0, dstW, dstH);
+    ctx.drawImage(decoded.source, 0, 0, dstW, dstH);
 
     const blob = await canvasToBlob(canvas, outputMimeType, quality);
 
@@ -171,7 +227,7 @@ export async function resizeImageFile(
     throw new Error(ERR_PROCESS);
   } finally {
     // Free decoded pixels promptly.
-    bitmap.close();
+    decoded.cleanup();
   }
 }
 
@@ -221,64 +277,124 @@ export async function createMainAndThumbnailImages(
 // keep a generous long edge (1800px) before falling back to a smaller pass.
 // ---------------------------------------------------------------------------
 
-/** OCR target: keep the uploaded JPEG comfortably small for Server Actions. */
+/** OCR target: drives whether we attempt the smaller second pass. */
 export const OCR_TARGET_MAX_BYTES = 2.5 * 1024 * 1024; // 2.5 MB
+
+/** Hard ceiling for what we'll upload to the OCR Server Action. Must stay in
+ *  sync with the server's MAX_FILE_SIZE_BYTES (5 MB) and under the Server
+ *  Action bodySizeLimit (6 MB). Used for both optimized output and raw
+ *  fallback acceptance. */
+export const OCR_MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 
 // First pass keeps text readable; second pass trades a little quality for size.
 const OCR_PASS_1 = { maxLongEdge: 1800, quality: 0.84 };
 const OCR_PASS_2 = { maxLongEdge: 1400, quality: 0.78 };
 
-/** True when a file looks like HEIC/HEIF by MIME type or extension. */
-function looksLikeHeic(file: File): boolean {
+/** Result of preparing an image for OCR upload. `optimized` is false when we
+ *  could not preprocess and fell back to uploading the raw file. */
+export type OcrImageResult = {
+  file: File;
+  optimized: boolean;
+  sizeBytes: number;
+};
+
+type OcrImageKind = "supported" | "heic" | "other";
+
+/** Classify by MIME type first, then filename extension. Phone/camera files
+ *  often arrive with an empty or generic MIME type, so the extension matters. */
+function classifyOcrImage(file: File): OcrImageKind {
   const type = file.type.toLowerCase();
-  if (type === "image/heic" || type === "image/heif") return true;
-  return /\.(heic|heif)$/i.test(file.name);
+  const name = file.name.toLowerCase();
+
+  if (
+    type === "image/heic" ||
+    type === "image/heif" ||
+    /\.(heic|heif)$/.test(name)
+  ) {
+    return "heic";
+  }
+  if (
+    type === "image/jpeg" ||
+    type === "image/png" ||
+    type === "image/webp" ||
+    /\.(jpe?g|png|webp)$/.test(name)
+  ) {
+    return "supported";
+  }
+  return "other";
 }
 
-/** True when a selection plausibly is an image we can try to decode. */
-function looksLikeImage(file: File): boolean {
-  if (file.type.startsWith("image/")) return true;
-  // Some browsers report an empty MIME type for camera files — fall back to ext.
-  return /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif)$/i.test(file.name);
-}
+/**
+ * Prepare a phone photo / screenshot for the OCR Server Action.
+ *
+ * Resilience order:
+ *   1. Optimize to a small JPEG (1800px → 1400px fallback). resizeImageFile has
+ *      its own decode fallback, so most "valid file but createImageBitmap throws"
+ *      cases already succeed here.
+ *   2. If optimization still fails AND the file is a valid JPG/PNG/WebP within
+ *      the server cap, upload the RAW file — a 2.8 MB phone JPG that previews
+ *      fine must not be rejected just because preprocessing failed.
+ *   3. HEIC that can't be decoded → friendly HEIC guidance.
+ *   4. Anything else → friendly non-image / too-heavy message.
+ */
+export async function processImageForOcr(file: File): Promise<OcrImageResult> {
+  const kind = classifyOcrImage(file);
 
-export async function processImageForOcr(file: File): Promise<ProcessedImage> {
-  if (!looksLikeImage(file)) {
+  // Not a recognizable image at all (no image MIME, no image extension).
+  if (kind === "other" && !file.type.startsWith("image/")) {
     throw new Error(ERR_OCR_NOT_IMAGE);
   }
+
+  // Absurdly large selections: only the raw fallback could apply, and it caps
+  // at the server limit, so reject early without doing expensive decode work.
   if (file.size > MAX_INPUT_BYTES) {
     throw new Error(ERR_OCR_TOO_HEAVY);
   }
 
-  const heic = looksLikeHeic(file);
-
-  // First pass — high readability. createImageBitmap is what decodes HEIC when
-  // the browser supports it; if it throws on a HEIC file, the browser can't
-  // decode it and we surface a HEIC-specific message instead of a generic one.
-  let processed: ProcessedImage;
   try {
-    processed = await resizeImageFile({
+    // Pass 1, then a smaller pass only if still above the soft target.
+    let best = await resizeImageFile({
       file,
       maxLongEdge: OCR_PASS_1.maxLongEdge,
       quality: OCR_PASS_1.quality,
       outputMimeType: "image/jpeg",
     });
+
+    if (best.sizeBytes > OCR_TARGET_MAX_BYTES) {
+      const second = await resizeImageFile({
+        file,
+        maxLongEdge: OCR_PASS_2.maxLongEdge,
+        quality: OCR_PASS_2.quality,
+        outputMimeType: "image/jpeg",
+      });
+      if (second.sizeBytes < best.sizeBytes) best = second;
+    }
+
+    // Accept the optimized image as long as it fits under the server cap.
+    if (best.sizeBytes <= OCR_MAX_UPLOAD_BYTES) {
+      return { file: best.file, optimized: true, sizeBytes: best.sizeBytes };
+    }
+
+    // Optimized but still over the cap → the raw file is larger, so too heavy.
+    throw new Error(ERR_OCR_TOO_HEAVY);
   } catch (err) {
-    if (heic) throw new Error(ERR_OCR_HEIC_UNSUPPORTED);
-    throw err instanceof Error ? err : new Error(ERR_PROCESS);
+    if (err instanceof Error && err.message === ERR_OCR_TOO_HEAVY) throw err;
+
+    // Preprocessing failed to decode/encode this file.
+    if (kind === "heic") {
+      throw new Error(ERR_OCR_HEIC_UNSUPPORTED);
+    }
+
+    // Valid JPG/PNG/WebP we just couldn't preprocess in this browser:
+    // fall back to uploading the raw file if it's within the server cap.
+    if (kind === "supported") {
+      if (file.size <= OCR_MAX_UPLOAD_BYTES) {
+        return { file, optimized: false, sizeBytes: file.size };
+      }
+      throw new Error(ERR_OCR_TOO_HEAVY);
+    }
+
+    // An "image/*" MIME we don't explicitly support and couldn't decode.
+    throw new Error(ERR_OCR_NOT_IMAGE);
   }
-
-  if (processed.sizeBytes <= OCR_TARGET_MAX_BYTES) return processed;
-
-  // Second pass — smaller + slightly lower quality.
-  const second = await resizeImageFile({
-    file,
-    maxLongEdge: OCR_PASS_2.maxLongEdge,
-    quality: OCR_PASS_2.quality,
-    outputMimeType: "image/jpeg",
-  });
-
-  if (second.sizeBytes <= OCR_TARGET_MAX_BYTES) return second;
-
-  throw new Error(ERR_OCR_TOO_HEAVY);
 }

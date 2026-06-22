@@ -12,15 +12,36 @@ import type { PropertyFormDefaults } from "../property-form";
 // ---------------------------------------------------------------------------
 // Allowed image MIME types and size cap
 // ---------------------------------------------------------------------------
-const ALLOWED_MIME_TYPES: SupportedImageMime[] = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
-const HEIC_MIME_TYPES = ["image/heic", "image/heif"];
 // The client preprocesses to a small JPEG (target ≤ 2.5 MB); this is a
 // defense-in-depth cap kept under the Server Action body limit (6 MB).
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+type ImageMimeKind = SupportedImageMime | "image/heic" | "image/heif";
+
+/**
+ * Resolve the effective image MIME type from the upload. Browsers (and our
+ * client raw-file fallback) sometimes send an empty or generic
+ * "application/octet-stream" type for a real photo, so we infer from the
+ * filename extension as a safe secondary signal. Only known image extensions
+ * are accepted — arbitrary files still resolve to null.
+ */
+function resolveImageMime(file: File): ImageMimeKind | null {
+  const type = file.type.toLowerCase();
+  if (type === "image/jpeg" || type === "image/png" || type === "image/webp") {
+    return type;
+  }
+  if (type === "image/heic" || type === "image/heif") {
+    return type;
+  }
+
+  // type empty / octet-stream / generic → infer from a known extension only.
+  const name = file.name.toLowerCase();
+  if (/\.jpe?g$/.test(name)) return "image/jpeg";
+  if (/\.png$/.test(name)) return "image/png";
+  if (/\.webp$/.test(name)) return "image/webp";
+  if (/\.(heic|heif)$/.test(name)) return "image/heic";
+  return null;
+}
 
 /**
  * Safe server-side log for OCR upload diagnostics. Logs only file metadata and
@@ -28,13 +49,14 @@ const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
  */
 function logOcrIssue(
   code: string,
-  meta: { name?: string; type?: string; size?: number }
+  meta: { name?: string; type?: string; inferred?: string; size?: number }
 ) {
   console.warn(
     `[quick-add-ocr] ${code}`,
     JSON.stringify({
       name: meta.name,
       type: meta.type,
+      inferred: meta.inferred,
       sizeBytes: meta.size,
     })
   );
@@ -150,11 +172,19 @@ export async function extractPropertyFromImageAction(
     };
   }
 
-  const fileMeta = { name: file.name, type: file.type, size: file.size };
+  // Resolve the effective MIME type (handles empty/octet-stream from the raw
+  // fallback by inferring from a known image extension).
+  const resolvedMime = resolveImageMime(file);
+  const fileMeta = {
+    name: file.name,
+    type: file.type,
+    inferred: resolvedMime ?? undefined,
+    size: file.size,
+  };
 
   // HEIC/HEIF — should be converted client-side; reject explicitly if it reaches
   // the server so the user gets guidance instead of a vision-API failure.
-  if (HEIC_MIME_TYPES.includes(file.type.toLowerCase())) {
+  if (resolvedMime === "image/heic" || resolvedMime === "image/heif") {
     logOcrIssue("reject_heic", fileMeta);
     return {
       draft: null,
@@ -164,8 +194,8 @@ export async function extractPropertyFromImageAction(
     };
   }
 
-  // Validate MIME type
-  if (!ALLOWED_MIME_TYPES.includes(file.type as SupportedImageMime)) {
+  // Validate MIME type — must resolve to a known supported image type.
+  if (resolvedMime === null) {
     logOcrIssue("reject_mime", fileMeta);
     return {
       draft: null,
@@ -202,10 +232,7 @@ export async function extractPropertyFromImageAction(
   // Step 1 — extract raw text from the image via vision
   let rawText: string;
   try {
-    rawText = await extractTextFromPropertyImage(
-      imageBase64,
-      file.type as SupportedImageMime
-    );
+    rawText = await extractTextFromPropertyImage(imageBase64, resolvedMime);
   } catch (err) {
     logOcrIssue("vision_failed", {
       ...fileMeta,

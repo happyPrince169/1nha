@@ -207,14 +207,16 @@ function ImageInputStep({
     setIsProcessing(true);
 
     try {
-      const processed = await processImageForOcr(file);
+      const result = await processImageForOcr(file);
       setProcessedNote(
-        `${processed.file.name} · ${formatMB(processed.sizeBytes)}`
+        result.optimized
+          ? `Đã tối ưu: ${result.file.name} · ${formatMB(result.sizeBytes)}`
+          : `Đọc ảnh gốc (không cần tối ưu) · ${formatMB(result.sizeBytes)}`
       );
 
       const formData = new FormData();
-      formData.append("image", processed.file);
-      // Dispatch the optimized image to the Server Action.
+      formData.append("image", result.file);
+      // Dispatch the optimized (or raw-fallback) image to the Server Action.
       startTransition(() => formAction(formData));
     } catch (err) {
       setClientError(

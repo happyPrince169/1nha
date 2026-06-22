@@ -1029,14 +1029,26 @@ Handling now:
   (src/lib/images/client-image-processing.ts → processImageForOcr):
     • resize to 1800px long edge, JPEG q0.84, strip metadata via canvas
     • retry at 1400px / q0.78 if still > 2.5 MB
-    • friendly "ảnh quá nặng" message if still too large
-- OCR accepts optimized JPEG / PNG / WebP only.
+    • accept the optimized JPEG as long as it fits the 5 MB server cap
+- Robust decode: resizeImageFile tries createImageBitmap first, then falls back
+  to an <img>/canvas decode. Some valid phone JPEGs throw in createImageBitmap
+  (orientation option / progressive / CMYK quirks) but decode fine via <img>.
+- Raw-file fallback: if preprocessing still fails for a valid JPG/PNG/WebP that
+  is within the 5 MB server cap, the ORIGINAL file is uploaded for OCR. A real
+  2.8 MB phone JPG that previews fine must never be rejected as "unsupported
+  format" just because client preprocessing failed.
+- Type detection uses BOTH file.type and filename extension (camera files often
+  have an empty/generic MIME type).
 - HEIC/HEIF: converted client-side when the browser can decode it; otherwise a
   friendly Vietnamese guidance message (no raw file is submitted, no crash).
-- Server Action body limit raised to 6 MB (next.config.ts) as headroom for the
-  optimized JPEG.
-- Server action re-validates MIME/size, rejects HEIC + oversized with friendly
-  messages, logs only file metadata (name/type/size) — never image bytes.
+- Server Action body limit raised to 6 MB (next.config.ts) as headroom.
+- Server action resolves the effective MIME (inferring from extension when the
+  type is empty/octet-stream), re-validates MIME/size, rejects HEIC + oversized
+  with friendly messages, and logs only file metadata (name/type/inferred/size)
+  — never image bytes or extracted text.
+- EXIF orientation: preserved on the createImageBitmap path and on modern <img>
+  decoders; in rare older engines the <img> fallback may not rotate perfectly —
+  a correctly-read (if slightly rotated) OCR is preferred over a hard failure.
 - No R2 / gallery upload behavior changed; the gallery flow keeps using
   createMainAndThumbnailImages and direct R2 upload.
 ```
