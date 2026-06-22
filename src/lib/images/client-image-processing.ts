@@ -18,10 +18,6 @@
 /** Output formats we know how to encode via canvas.toBlob. */
 export type OutputMimeType = "image/jpeg" | "image/webp" | "image/png";
 
-/** Accepted input formats. HEIC is intentionally excluded this sprint — it only
- *  works if the browser already decodes it, which most do not. */
-const ALLOWED_INPUT_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
-
 /** Reject raw selections above this size before doing any (expensive) work. */
 export const MAX_INPUT_BYTES = 20 * 1024 * 1024; // 20 MB
 
@@ -34,18 +30,26 @@ export const THUMBNAIL_MAX_LONG_EDGE = 480;
 export const THUMBNAIL_QUALITY = 0.72;
 
 // User-facing messages (Vietnamese).
+// Internal decode/encode failures — callers remap these to friendlier text.
 const ERR_DECODE =
   "Không xử lý được ảnh này. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.";
-const ERR_TOO_LARGE = "Ảnh quá lớn. Vui lòng chọn ảnh dưới 20MB.";
 const ERR_PROCESS = "Không xử lý được ảnh. Vui lòng thử ảnh khác.";
 
-// OCR-specific messages.
-export const ERR_OCR_NOT_IMAGE =
+// Shared friendly messages — used by BOTH Quick Add OCR and gallery upload.
+export const ERR_NOT_IMAGE =
   "File này không phải ảnh. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.";
+export const ERR_HEIC_UNSUPPORTED =
+  "Ảnh HEIC từ iPhone chưa được hỗ trợ trên trình duyệt này. Vui lòng chụp màn hình hoặc đổi camera sang JPG.";
+
+// Quick Add OCR.
 export const ERR_OCR_TOO_HEAVY =
   "Ảnh quá nặng để đọc tự động. Vui lòng chụp lại rõ phần tin đăng hoặc chọn ảnh nhẹ hơn.";
-export const ERR_OCR_HEIC_UNSUPPORTED =
-  "Ảnh HEIC từ iPhone chưa được hỗ trợ trên trình duyệt này. Vui lòng chụp màn hình hoặc đổi camera sang JPG.";
+
+// Property image gallery upload.
+export const ERR_GALLERY_TOO_LARGE =
+  "Ảnh quá nặng. Vui lòng chọn ảnh nhẹ hơn hoặc chụp lại gần hơn.";
+export const ERR_GALLERY_PROCESS =
+  "Không tối ưu được ảnh này. Vui lòng chụp lại ảnh rõ hơn hoặc thử ảnh chụp màn hình.";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -237,30 +241,49 @@ export async function resizeImageFile(
 export async function createMainAndThumbnailImages(
   file: File
 ): Promise<MainAndThumbnailImages> {
-  if (!ALLOWED_INPUT_MIME.has(file.type)) {
-    throw new Error(ERR_DECODE);
+  const kind = classifyImageFile(file);
+
+  // Reject only true non-images. A valid JPG/PNG/WebP with an empty or
+  // non-standard MIME type (common for phone photos) must NOT be rejected here.
+  if (kind === "other" && !file.type.startsWith("image/")) {
+    throw new Error(ERR_NOT_IMAGE);
   }
   if (file.size > MAX_INPUT_BYTES) {
-    throw new Error(ERR_TOO_LARGE);
+    throw new Error(ERR_GALLERY_TOO_LARGE);
   }
 
   // Main social-ready image — high quality, used for download/copy/open/post.
-  const main = await resizeImageFile({
-    file,
-    maxLongEdge: MAIN_MAX_LONG_EDGE,
-    quality: MAIN_QUALITY,
-    outputMimeType: "image/jpeg",
-    outputFileName: withExtension(file.name, "image/jpeg"),
-  });
+  // resizeImageFile decodes via createImageBitmap, then falls back to <img>, so
+  // valid photos that createImageBitmap can't handle still succeed here.
+  let main: ProcessedImage;
+  try {
+    main = await resizeImageFile({
+      file,
+      maxLongEdge: MAIN_MAX_LONG_EDGE,
+      quality: MAIN_QUALITY,
+      outputMimeType: "image/jpeg",
+      outputFileName: withExtension(file.name, "image/jpeg"),
+    });
+  } catch {
+    // HEIC the browser can't decode → guidance; anything else valid → generic
+    // "couldn't optimize" (never the misleading unsupported-format message).
+    throw new Error(kind === "heic" ? ERR_HEIC_UNSUPPORTED : ERR_GALLERY_PROCESS);
+  }
 
-  // Thumbnail — small, used only for fast in-app previews.
-  const thumbnail = await resizeImageFile({
-    file,
-    maxLongEdge: THUMBNAIL_MAX_LONG_EDGE,
-    quality: THUMBNAIL_QUALITY,
-    outputMimeType: "image/jpeg",
-    outputFileName: withExtension(`${file.name}-thumb`, "image/jpeg"),
-  });
+  // Thumbnail — small, used only for fast in-app previews. Decode already
+  // succeeded for the main image, so a failure here is an encode/canvas issue.
+  let thumbnail: ProcessedImage;
+  try {
+    thumbnail = await resizeImageFile({
+      file,
+      maxLongEdge: THUMBNAIL_MAX_LONG_EDGE,
+      quality: THUMBNAIL_QUALITY,
+      outputMimeType: "image/jpeg",
+      outputFileName: withExtension(`${file.name}-thumb`, "image/jpeg"),
+    });
+  } catch {
+    throw new Error(ERR_GALLERY_PROCESS);
+  }
 
   return { main, thumbnail };
 }
@@ -298,11 +321,17 @@ export type OcrImageResult = {
   sizeBytes: number;
 };
 
-type OcrImageKind = "supported" | "heic" | "other";
+/**
+ * Image classification shared by Quick Add OCR and the property gallery upload.
+ *   • "supported" — jpg/jpeg/png/webp (by MIME or extension)
+ *   • "heic"      — heic/heif (decodable only if the browser supports it)
+ *   • "other"     — anything else (may still be a decodable image/* MIME)
+ */
+export type ImageKind = "supported" | "heic" | "other";
 
 /** Classify by MIME type first, then filename extension. Phone/camera files
  *  often arrive with an empty or generic MIME type, so the extension matters. */
-function classifyOcrImage(file: File): OcrImageKind {
+export function classifyImageFile(file: File): ImageKind {
   const type = file.type.toLowerCase();
   const name = file.name.toLowerCase();
 
@@ -324,6 +353,12 @@ function classifyOcrImage(file: File): OcrImageKind {
   return "other";
 }
 
+/** True when a selection is plausibly an image worth attempting to decode —
+ *  used for cheap select-time validation before the heavy processing step. */
+export function isProbablyImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || classifyImageFile(file) !== "other";
+}
+
 /**
  * Prepare a phone photo / screenshot for the OCR Server Action.
  *
@@ -338,11 +373,11 @@ function classifyOcrImage(file: File): OcrImageKind {
  *   4. Anything else → friendly non-image / too-heavy message.
  */
 export async function processImageForOcr(file: File): Promise<OcrImageResult> {
-  const kind = classifyOcrImage(file);
+  const kind = classifyImageFile(file);
 
   // Not a recognizable image at all (no image MIME, no image extension).
   if (kind === "other" && !file.type.startsWith("image/")) {
-    throw new Error(ERR_OCR_NOT_IMAGE);
+    throw new Error(ERR_NOT_IMAGE);
   }
 
   // Absurdly large selections: only the raw fallback could apply, and it caps
@@ -382,7 +417,7 @@ export async function processImageForOcr(file: File): Promise<OcrImageResult> {
 
     // Preprocessing failed to decode/encode this file.
     if (kind === "heic") {
-      throw new Error(ERR_OCR_HEIC_UNSUPPORTED);
+      throw new Error(ERR_HEIC_UNSUPPORTED);
     }
 
     // Valid JPG/PNG/WebP we just couldn't preprocess in this browser:
@@ -395,6 +430,6 @@ export async function processImageForOcr(file: File): Promise<OcrImageResult> {
     }
 
     // An "image/*" MIME we don't explicitly support and couldn't decode.
-    throw new Error(ERR_OCR_NOT_IMAGE);
+    throw new Error(ERR_NOT_IMAGE);
   }
 }

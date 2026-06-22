@@ -10,7 +10,7 @@ import {
 } from "./actions";
 import {
   processImageForOcr,
-  ERR_OCR_NOT_IMAGE,
+  ERR_NOT_IMAGE,
 } from "@/lib/images/client-image-processing";
 import { createProperty } from "../new/actions";
 import { PropertyForm } from "../property-form";
@@ -173,7 +173,7 @@ function ImageInputStep({
       selected.type.startsWith("image/") ||
       /\.(jpe?g|png|webp|heic|heif|gif|bmp|avif)$/i.test(selected.name);
     if (!plausible) {
-      setClientError(ERR_OCR_NOT_IMAGE);
+      setClientError(ERR_NOT_IMAGE);
       setFile(null);
       resetPreview(null);
       e.target.value = "";

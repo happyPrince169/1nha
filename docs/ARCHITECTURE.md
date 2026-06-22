@@ -1053,6 +1053,28 @@ Handling now:
   createMainAndThumbnailImages and direct R2 upload.
 ```
 
+### Shared image decode/classification
+
+`src/lib/images/client-image-processing.ts` is the single source of truth for
+client image decode + type handling, shared by **both** Quick Add OCR
+(`processImageForOcr`) and the **property gallery upload**
+(`createMainAndThumbnailImages`):
+
+```text
+- classifyImageFile(file): "supported" | "heic" | "other", by MIME AND extension
+  (phone photos often have an empty/non-standard MIME like image/jpg).
+- resizeImageFile decodes via createImageBitmap → falls back to <img>/canvas, so
+  valid JPEGs that createImageBitmap can't handle still process.
+- Gallery upload no longer does file.type-only validation; a valid JPG/PNG/WebP
+  with an empty/odd MIME type is no longer rejected as "unsupported format".
+- Gallery error mapping: non-image / HEIC-undecodable / valid-but-process-failed
+  / too-large each get their own friendly message (never the misleading
+  "choose JPG/PNG/WEBP" for a valid JPG).
+- Gallery still outputs main (≈2048px / q0.86) + thumbnail (≈480px / q0.72) JPEG
+  and uploads directly to R2 — architecture unchanged. Output is always JPEG, so
+  the server/service MIME allowlist still passes.
+```
+
 ### Scale guardrails (Phase 1)
 
 ```text

@@ -5,14 +5,20 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
-import { createMainAndThumbnailImages } from "@/lib/images/client-image-processing";
+import {
+  createMainAndThumbnailImages,
+  isProbablyImageFile,
+  ERR_NOT_IMAGE,
+  ERR_GALLERY_TOO_LARGE,
+} from "@/lib/images/client-image-processing";
 import {
   requestProcessedPropertyImageUpload,
   finalizePropertyImageUpload,
 } from "./actions";
 
-const ACCEPTED = "image/jpeg,image/png,image/webp";
-const ALLOWED = ["image/jpeg", "image/png", "image/webp"];
+// "image/*" so phone cameras/galleries (incl. HEIC and empty-MIME JPEGs) can be
+// selected; createMainAndThumbnailImages validates + converts robustly.
+const ACCEPTED = "image/*";
 // Raw selection limit — the browser resizes/compresses down to a social-ready
 // main image + small thumbnail before anything is uploaded.
 const MAX_MB = 20;
@@ -51,17 +57,18 @@ function UploadFormInner({
       setPreview(null);
       return;
     }
-    if (!ALLOWED.includes(picked.type)) {
-      setError("Định dạng không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP.");
+    // Accept anything plausibly an image (by MIME or extension); the real
+    // decode/format validation happens in createMainAndThumbnailImages so a
+    // valid .jpg with an empty/odd MIME type is never rejected here.
+    if (!isProbablyImageFile(picked)) {
+      setError(ERR_NOT_IMAGE);
       e.target.value = "";
       setFile(null);
       setPreview(null);
       return;
     }
     if (picked.size > MAX_BYTES) {
-      setError(
-        `Ảnh quá lớn (${(picked.size / 1024 / 1024).toFixed(1)} MB). Tối đa ${MAX_MB} MB.`
-      );
+      setError(ERR_GALLERY_TOO_LARGE);
       e.target.value = "";
       setFile(null);
       setPreview(null);
