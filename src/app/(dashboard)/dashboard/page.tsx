@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { createClient } from "@/lib/supabase/server";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { buttonVariants } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { Separator } from "@/components/ui/separator";
 import { StatCard } from "@/components/stat-card";
 import { OnboardingChecklist } from "@/components/dashboard/onboarding-checklist";
@@ -11,13 +12,13 @@ import { cn } from "@/lib/utils";
 export const metadata: Metadata = { title: "1nha — Kho nguồn & trợ lý đăng bài" };
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped counts via the request context (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
+  const { supabase, organizationId } = ctx;
 
   // --- Real Supabase counts -----------------------------------------------
-  // All queries are scoped to the authenticated user and run in parallel.
+  // All queries are scoped to the current workspace and run in parallel.
 
   const startOfWeek = new Date();
   startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
@@ -31,18 +32,18 @@ export default async function DashboardPage() {
     supabase
       .from("properties")
       .select("id", { count: "exact", head: true })
-      .eq("user_id", user?.id ?? "")
+      .eq("organization_id", organizationId)
       .neq("status", "archived"),
 
     supabase
       .from("generated_contents")
       .select("id", { count: "exact", head: true })
-      .eq("user_id", user?.id ?? ""),
+      .eq("organization_id", organizationId),
 
     supabase
       .from("generated_contents")
       .select("id", { count: "exact", head: true })
-      .eq("user_id", user?.id ?? "")
+      .eq("organization_id", organizationId)
       .gte("created_at", startOfWeek.toISOString()),
   ]);
 
@@ -60,25 +61,28 @@ export default async function DashboardPage() {
 
       {/* Primary actions */}
       <section className="grid gap-2.5">
-        <Link
+        <LinkButton
           href="/dashboard/properties/quick-add"
-          className={cn(buttonVariants({ size: "lg" }), "h-11 w-full")}
+          size="lg"
+          className="h-11 w-full"
         >
           ✨ Nhập nhanh nguồn mới
-        </Link>
+        </LinkButton>
         <div className="grid grid-cols-2 gap-2">
-          <Link
+          <LinkButton
             href="/dashboard/properties"
-            className={cn(buttonVariants({ variant: "outline" }), "h-11 w-full")}
+            variant="outline"
+            className="h-11 w-full"
           >
             🗂️ Xem kho nguồn
-          </Link>
-          <Link
+          </LinkButton>
+          <LinkButton
             href="/dashboard/style-profiles"
-            className={cn(buttonVariants({ variant: "outline" }), "h-11 w-full")}
+            variant="outline"
+            className="h-11 w-full"
           >
             ✍️ Tạo văn phong
-          </Link>
+          </LinkButton>
         </div>
         <Link
           href="/dashboard/content"

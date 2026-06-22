@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import { getPropertyById } from "@/lib/services/properties";
+import { listStyleProfiles } from "@/lib/services/style-profiles";
 import { generatePropertyContent } from "./actions";
 import { GenerateForm, type StyleProfileOption } from "./generate-form";
 import { buttonVariants } from "@/components/ui/button";
@@ -17,41 +20,27 @@ export const metadata: Metadata = { title: "Tạo content AI" };
 export default async function GeneratePage({ params }: Props) {
   const { id } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped reads via the shared services (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
+  // Confirm the property is in the current workspace before rendering.
+  let property;
+  try {
+    property = await getPropertyById(ctx, id);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
+  }
 
-  // Confirm the property exists and belongs to this user before rendering.
-  const { data: property } = await supabase
-    .from("properties")
-    .select("id,title")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single();
-
-  if (!property) notFound();
-
-  // Saved writing-style profiles for this user. Scoped by user_id; default
-  // first, then most recent. style_rules is selected but not shipped to the
-  // client form — the action re-fetches it server-side when generating.
-  const { data: styleProfiles } = await supabase
-    .from("content_style_profiles")
-    .select("id,name,platform,is_default,style_rules")
-    .eq("user_id", user.id)
-    .order("is_default", { ascending: false })
-    .order("created_at", { ascending: false });
-
-  const profileOptions: StyleProfileOption[] = (styleProfiles ?? []).map(
-    (p) => ({
-      id: p.id as string,
-      name: p.name as string,
-      platform: (p.platform as string | null) ?? null,
-      is_default: Boolean(p.is_default),
-    })
-  );
+  // Saved writing-style profiles for the workspace (default first, then newest).
+  const { profiles } = await listStyleProfiles(ctx);
+  const profileOptions: StyleProfileOption[] = profiles.map((p) => ({
+    id: p.id,
+    name: p.name,
+    platform: p.platform,
+    is_default: p.is_default,
+  }));
 
   // Bind the property id into the action server-side.
   const boundAction = generatePropertyContent.bind(null, id);

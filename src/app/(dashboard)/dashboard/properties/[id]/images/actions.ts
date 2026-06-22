@@ -1,19 +1,12 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
-
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/lib/supabase/server";
+import { getRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
 import { trackEvent } from "@/lib/usage";
-import {
-  createPropertyImageUploadTarget,
-  createPropertyImageUploadTargetsForProcessedImages,
-  deleteR2Object,
-  R2_PENDING_PATH,
-  StorageConfigError,
-  StorageValidationError,
-} from "@/lib/storage/property-media";
+import * as propertyImages from "@/lib/services/property-images";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,41 +48,6 @@ async function requirePropertyOwnership(
   if (error || !data) throw new ActionError("Không tìm thấy bất động sản.");
   return data;
 }
-
-/**
- * Verifies the image belongs to the user and the given property.
- * Returns the image row on success, throws ActionError otherwise.
- */
-async function requireImageOwnership(
-  supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
-  imageId: string,
-  propertyId: string,
-  userId: string
-) {
-  const { data, error } = await supabase
-    .from("property_images")
-    .select(
-      "id, storage_path, is_cover, storage_provider, original_key, thumbnail_key, preview_key"
-    )
-    .eq("id", imageId)
-    .eq("property_id", propertyId)
-    .eq("user_id", userId)
-    .single();
-
-  if (error || !data) throw new ActionError("Không tìm thấy hình ảnh.");
-  return data as ImageOwnershipRow;
-}
-
-/** The image columns needed to delete/finalize across both storage providers. */
-type ImageOwnershipRow = {
-  id: string;
-  storage_path: string | null;
-  is_cover: boolean;
-  storage_provider: string | null;
-  original_key: string | null;
-  thumbnail_key: string | null;
-  preview_key: string | null;
-};
 
 /** Revalidate all paths that display property images. */
 function revalidateImagePaths(propertyId: string) {
@@ -273,82 +231,15 @@ export async function requestPropertyImageUpload(
   input: RequestUploadInput
 ): Promise<RequestUploadResult> {
   try {
-    const { supabase, user } = await requireUser();
-    await requirePropertyOwnership(supabase, propertyId, user.id);
-
-    const { fileName, mimeType, sizeBytes } = input;
-
-    if (!ALLOWED_MIME_TYPES.has(mimeType)) {
-      return {
-        ok: false,
-        error: "Định dạng không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP.",
-      };
-    }
-    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
-      return { ok: false, error: "Tệp ảnh không hợp lệ." };
-    }
-    if (sizeBytes > MAX_BYTES) {
-      return {
-        ok: false,
-        error: `Ảnh quá lớn (${(sizeBytes / 1024 / 1024).toFixed(1)} MB). Tối đa 2 MB.`,
-      };
-    }
-
-    // Generate the id first so the R2 key is stable and we can presign before
-    // touching the database — a config/validation failure leaves no orphan row.
-    const imageId = randomUUID();
-
-    let target;
-    try {
-      target = await createPropertyImageUploadTarget({
-        userId: user.id,
-        propertyId,
-        imageId,
-        fileName,
-        mimeType,
-        sizeBytes,
-      });
-    } catch (err) {
-      if (
-        err instanceof StorageConfigError ||
-        err instanceof StorageValidationError
-      ) {
-        return { ok: false, error: err.message };
-      }
-      return { ok: false, error: "Không thể tạo liên kết tải lên R2." };
-    }
-
-    const { error: insertError } = await supabase
-      .from("property_images")
-      .insert({
-        id: imageId,
-        user_id: user.id,
-        property_id: propertyId,
-        storage_provider: "cloudflare_r2",
-        storage_path: R2_PENDING_PATH, // replaced with original_key on finalize
-        original_key: target.originalKey,
-        file_name: fileName,
-        mime_type: mimeType,
-        size_bytes: sizeBytes,
-        original_mime_type: mimeType,
-        original_size_bytes: sizeBytes,
-      });
-
-    if (insertError) {
-      return { ok: false, error: insertError.message };
-    }
-
-    return {
-      ok: true,
-      imageId,
-      uploadUrl: target.uploadUrl,
-      originalKey: target.originalKey,
-      contentType: mimeType,
-      expiresIn: target.expiresIn,
-    };
+    const ctx = await getRequestContext();
+    const result = await propertyImages.requestPropertyImageUpload(
+      ctx,
+      propertyId,
+      input
+    );
+    return { ok: true, ...result };
   } catch (err) {
-    if (err instanceof ActionError) return { ok: false, error: err.message };
-    return { ok: false, error: "Lỗi không xác định. Vui lòng thử lại." };
+    return { ok: false, error: toApiError(err).message };
   }
 }
 
@@ -397,93 +288,15 @@ export async function requestProcessedPropertyImageUpload(
   input: RequestProcessedUploadInput
 ): Promise<RequestProcessedUploadResult> {
   try {
-    const { supabase, user } = await requireUser();
-    await requirePropertyOwnership(supabase, propertyId, user.id);
-
-    const { fileName, width, height, original, thumbnail } = input;
-
-    // Basic shape validation (the storage layer re-checks MIME + size limits).
-    for (const part of [original, thumbnail]) {
-      if (!ALLOWED_MIME_TYPES.has(part.mimeType)) {
-        return {
-          ok: false,
-          error: "Định dạng không hợp lệ. Chỉ chấp nhận JPEG, PNG, WebP.",
-        };
-      }
-      if (!Number.isFinite(part.sizeBytes) || part.sizeBytes <= 0) {
-        return { ok: false, error: "Tệp ảnh không hợp lệ." };
-      }
-    }
-    if (
-      !Number.isFinite(width) ||
-      !Number.isFinite(height) ||
-      width <= 0 ||
-      height <= 0
-    ) {
-      return { ok: false, error: "Kích thước ảnh không hợp lệ." };
-    }
-
-    // Generate the id first so the R2 keys are stable and we can presign before
-    // touching the database — a config/validation failure leaves no orphan row.
-    const imageId = randomUUID();
-
-    let targets;
-    try {
-      targets = await createPropertyImageUploadTargetsForProcessedImages({
-        userId: user.id,
-        propertyId,
-        imageId,
-        original,
-        thumbnail,
-      });
-    } catch (err) {
-      if (
-        err instanceof StorageConfigError ||
-        err instanceof StorageValidationError
-      ) {
-        return { ok: false, error: err.message };
-      }
-      return { ok: false, error: "Không thể tạo liên kết tải lên R2." };
-    }
-
-    const { error: insertError } = await supabase
-      .from("property_images")
-      .insert({
-        id: imageId,
-        user_id: user.id,
-        property_id: propertyId,
-        storage_provider: "cloudflare_r2",
-        storage_path: R2_PENDING_PATH, // replaced with original_key on finalize
-        original_key: targets.originalKey,
-        thumbnail_key: targets.thumbnailKey,
-        file_name: fileName,
-        mime_type: original.mimeType,
-        size_bytes: original.sizeBytes,
-        original_mime_type: original.mimeType,
-        original_size_bytes: original.sizeBytes,
-        thumbnail_size_bytes: thumbnail.sizeBytes,
-        width,
-        height,
-      });
-
-    if (insertError) {
-      return { ok: false, error: insertError.message };
-    }
-
-    return {
-      ok: true,
-      imageId,
-      originalUploadUrl: targets.originalUploadUrl,
-      thumbnailUploadUrl: targets.thumbnailUploadUrl,
-      originalKey: targets.originalKey,
-      thumbnailKey: targets.thumbnailKey,
-      originalContentType: targets.originalContentType,
-      thumbnailContentType: targets.thumbnailContentType,
-      expiresIn: targets.expiresIn,
-    };
+    const ctx = await getRequestContext();
+    const targets = await propertyImages.requestPropertyImageUploadTargets(
+      ctx,
+      propertyId,
+      input
+    );
+    return { ok: true, ...targets };
   } catch (err) {
-    if (err instanceof ActionError) return { ok: false, error: err.message };
-    return { ok: false, error: "Lỗi không xác định. Vui lòng thử lại." };
+    return { ok: false, error: toApiError(err).message };
   }
 }
 
@@ -501,36 +314,14 @@ export async function finalizePropertyImageUpload(
   imageId: string
 ): Promise<FinalizeUploadResult> {
   try {
-    const { supabase, user } = await requireUser();
-    await requirePropertyOwnership(supabase, propertyId, user.id);
-    const image = await requireImageOwnership(
-      supabase,
+    const ctx = await getRequestContext();
+    await propertyImages.finalizePropertyImageUpload(ctx, propertyId, {
       imageId,
-      propertyId,
-      user.id
-    );
-
-    const readyPath = image.original_key ?? image.storage_path;
-
-    const { error } = await supabase
-      .from("property_images")
-      .update({ storage_path: readyPath })
-      .eq("id", imageId)
-      .eq("user_id", user.id)
-      .eq("property_id", propertyId);
-
-    if (error) return { ok: false, error: error.message };
-
-    await trackEvent(supabase, user.id, "property_image_uploaded", {
-      property_id: propertyId,
-      image_id: imageId,
     });
-
     revalidateImagePaths(propertyId);
     return { ok: true };
   } catch (err) {
-    if (err instanceof ActionError) return { ok: false, error: err.message };
-    return { ok: false, error: "Lỗi không xác định." };
+    return { ok: false, error: toApiError(err).message };
   }
 }
 
@@ -545,29 +336,8 @@ export async function setPropertyCoverImage(
   imageId: string
 ): Promise<void> {
   try {
-    const { supabase, user } = await requireUser();
-    await requirePropertyOwnership(supabase, propertyId, user.id);
-    await requireImageOwnership(supabase, imageId, propertyId, user.id);
-
-    // Clear existing cover (scoped to user + property)
-    await supabase
-      .from("property_images")
-      .update({ is_cover: false })
-      .eq("property_id", propertyId)
-      .eq("user_id", user.id);
-
-    // Set new cover
-    await supabase
-      .from("property_images")
-      .update({ is_cover: true })
-      .eq("id", imageId)
-      .eq("user_id", user.id);
-
-    await trackEvent(supabase, user.id, "property_cover_updated", {
-      property_id: propertyId,
-      image_id: imageId,
-    });
-
+    const ctx = await getRequestContext();
+    await propertyImages.setPropertyCoverImage(ctx, propertyId, imageId);
     revalidateImagePaths(propertyId);
   } catch {
     // Swallow — the UI polls on revalidation; a failure here just leaves
@@ -586,52 +356,8 @@ export async function deletePropertyImage(
   imageId: string
 ): Promise<void> {
   try {
-    const { supabase, user } = await requireUser();
-    await requirePropertyOwnership(supabase, propertyId, user.id);
-    const image = await requireImageOwnership(
-      supabase,
-      imageId,
-      propertyId,
-      user.id
-    );
-
-    // Delete the stored object(s) first. A missing object is treated as
-    // non-fatal so DB cleanup always proceeds — the operation stays idempotent.
-    if (image.storage_provider === "cloudflare_r2") {
-      const keys = [
-        image.original_key,
-        image.thumbnail_key,
-        image.preview_key,
-      ].filter((k): k is string => typeof k === "string" && k.length > 0);
-      for (const key of keys) {
-        try {
-          await deleteR2Object(key);
-        } catch {
-          // Object already gone / transient R2 error — safe to ignore here.
-        }
-      }
-    } else if (
-      image.storage_path &&
-      image.storage_path !== "__pending__" &&
-      image.storage_path !== R2_PENDING_PATH
-    ) {
-      // Legacy Supabase Storage row.
-      await supabase.storage.from(BUCKET).remove([image.storage_path]);
-    }
-
-    // Delete metadata row (double-scoped)
-    await supabase
-      .from("property_images")
-      .delete()
-      .eq("id", imageId)
-      .eq("user_id", user.id)
-      .eq("property_id", propertyId);
-
-    await trackEvent(supabase, user.id, "property_image_deleted", {
-      property_id: propertyId,
-      image_id: imageId,
-    });
-
+    const ctx = await getRequestContext();
+    await propertyImages.deletePropertyImage(ctx, propertyId, imageId);
     revalidateImagePaths(propertyId);
   } catch {
     // Silent — UI will reflect the unchanged state after revalidation.
@@ -652,31 +378,21 @@ export async function updatePropertyImageMeta(
   formData: FormData
 ): Promise<UpdateImageMetaState> {
   try {
-    const { supabase, user } = await requireUser();
-    await requirePropertyOwnership(supabase, propertyId, user.id);
-    await requireImageOwnership(supabase, imageId, propertyId, user.id);
+    const ctx = await getRequestContext();
 
     const getString = (key: string): string | null => {
       const v = formData.get(key);
-      return typeof v === "string" && v.trim() ? v.trim() : null;
+      return typeof v === "string" ? v : null;
     };
 
-    const { error } = await supabase
-      .from("property_images")
-      .update({
-        caption: getString("caption"),
-        alt_text: getString("alt_text"),
-      })
-      .eq("id", imageId)
-      .eq("user_id", user.id)
-      .eq("property_id", propertyId);
-
-    if (error) return { error: error.message };
+    await propertyImages.updatePropertyImage(ctx, propertyId, imageId, {
+      caption: getString("caption"),
+      alt_text: getString("alt_text"),
+    });
 
     revalidateImagePaths(propertyId);
     return { error: null };
   } catch (err) {
-    if (err instanceof ActionError) return { error: err.message };
-    return { error: "Lỗi không xác định." };
+    return { error: toApiError(err).message };
   }
 }

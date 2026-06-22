@@ -172,6 +172,168 @@ Sign-in UI and sendPhoneOtp/verifyPhoneOtp from 3A.2 are unchanged. Exact eSMS
 payload must be verified against eSMS docs before production (adapter isolated;
 use ESMS_SANDBOX=1 to validate). No mobile app yet.
 
+> ⏸️ **Vietnam SMS OTP provider integration is PAUSED** until provider
+> credentials/contracts are finalized. The Send SMS Hook adapter (3A.3) and
+> phone-first UI (3A.2) stay in place; no provider secrets are wired and no
+> further SMS provider work happens until setup is finalized
+> (see `docs/SMS_OTP_PROVIDER_SETUP.md`). Social OAuth is also NOT needed yet.
+
+**Phase 3B-1 — 🟢 IMPLEMENTED** (Property Images service + mobile-ready API):
+
+```text
+- Shared server-only service: src/lib/services/property-images.ts
+  list / get / requestUpload / requestUploadTargets / finalize / update /
+  delete / setCover. Organization-aware THROUGH the parent property (verify
+  property in ctx.organizationId, then scope images by property_id; RLS
+  property_images_member_all is the backstop). Guessed cross-org id → NOT_FOUND.
+- Web Server Actions (.../images/actions.ts) now delegate to the service for the
+  R2 upload-target / finalize / delete / set-cover / update-meta flows. Gallery
+  UI, client-side resize/compress, and the direct-to-R2 PUT flow are unchanged.
+  Legacy Supabase Storage upload action retained untouched as a fallback.
+- API routes (cookie + Bearer auth, { ok, data } / { ok, error } envelope):
+  GET    /api/properties/[id]/images                  (?variant=thumbnail|original)
+  POST   /api/properties/[id]/images/upload-targets
+  POST   /api/properties/[id]/images/finalize
+  PATCH  /api/properties/[id]/images/[imageId]
+  DELETE /api/properties/[id]/images/[imageId]
+  POST   /api/properties/[id]/images/[imageId]/cover
+- Storage logic stays solely in src/lib/storage/property-media.ts. R2 remains
+  the provider for new images; Supabase Storage remains the legacy fallback.
+  Pending rows excluded from reads; thumbnails returned by default (originals
+  only on explicit ?variant=original). No service-role / storage secrets exposed.
+```
+
+Verified: every image API route returns `401 { ok:false, error:{code:"UNAUTHORIZED"} }`
+unauthenticated; lint + typecheck + build pass. No DB/RLS/schema changes, no
+legacy image migration, no mobile app.
+
+**Phase 3B-2 — 🟢 IMPLEMENTED** (Style Profiles service + mobile-ready API):
+
+```text
+- Shared server-only service: src/lib/services/style-profiles.ts
+  list / get / getDefault / create / update / setDefault / delete.
+  Organization-scoped (filter by ctx.organizationId; RLS
+  content_style_profiles_member_all is the backstop). Guessed cross-org id →
+  NOT_FOUND. Inserts set user_id (legacy) + organization_id + created_by.
+  Setting a default clears the org's previous default first (one default per
+  org via service logic — no schema change).
+- Web Server Actions (.../style-profiles/actions.ts) now delegate to the
+  service for create / update / set-default / delete. The AI analyze-style step
+  (analyzeContentStyle) runs inside the service create. UI, form behavior,
+  Vietnamese error messages, redirect/revalidate all unchanged.
+- API routes (cookie + Bearer auth, { ok, data } / { ok, error } envelope):
+  GET    /api/style-profiles                  → { profiles, defaultProfileId }
+  POST   /api/style-profiles                  → { profile }
+  GET    /api/style-profiles/[id]             → { profile }
+  PATCH  /api/style-profiles/[id]             → { profile }
+  DELETE /api/style-profiles/[id]             → { id }
+  POST   /api/style-profiles/[id]/default     → { profile, defaultProfileId }
+- style_rules is AI-generated JSONB (not user-editable). Public payload omits
+  user_id/organization_id/created_by; sample_text only on single-resource read.
+```
+
+Verified: every style-profile API route returns
+`401 { ok:false, error:{code:"UNAUTHORIZED"} }` unauthenticated; lint +
+typecheck + build pass. Content generation is migrated in Phase 3B-3 (below).
+Post Assistant API stays future **Phase 3C**. Vietnam SMS OTP provider remains
+**paused**; social OAuth still not needed. No DB/RLS/schema changes, no mobile app.
+
+**Phase 3B-3 — 🟢 IMPLEMENTED** (Content Generation service + mobile-ready API):
+
+```text
+- Shared server-only service: src/lib/services/generated-content.ts
+  list / listForProperty / get / getForProperty / generate / regenerate /
+  update / archive. Organization-scoped (filter by ctx.organizationId; RLS
+  generated_contents_member_all is the backstop). Property access verified via
+  the Properties service, style profile via the Style Profiles service →
+  guessed cross-org property/content/profile id = NOT_FOUND. Inserts set
+  user_id (legacy) + organization_id + created_by.
+- AI behaviour unchanged: buildPropertyPrompt + "tone:<id>"/"style:<id>" voice
+  resolution are identical; selected style_rules injected as before; sample
+  text never sent verbatim. prompt_used stored but never returned; payloads omit
+  user_id/organization_id/created_by. No AI is called on reads.
+- Web Server Actions delegate to the service: generatePropertyContent
+  (generate), updateContentText + updateContentNotes (→ updateGeneratedContent),
+  archiveContent (→ archiveGeneratedContent). /dashboard/content list now reads
+  through listGeneratedContents. UI, "Giọng văn" UX, redirects, pending states,
+  filters/search all unchanged. Post Assistant status actions (mark copied /
+  scheduled / posted) intentionally left on their existing actions.
+- API routes (cookie + Bearer auth, { ok, data } / { ok, error } envelope):
+  GET    /api/generated-contents                          → { contents, nextPage }
+  GET    /api/generated-contents/[id]                     → { content }
+  PATCH  /api/generated-contents/[id]                     → { content }
+  POST   /api/generated-contents/[id]/regenerate          → { content }
+  POST   /api/generated-contents/[id]/archive             → { id, archived: true }
+  GET    /api/properties/[id]/generated-contents          → { contents }
+  POST   /api/properties/[id]/generated-contents/generate → { content }
+```
+
+Depends on the Properties service (3A) and Style Profiles service (3B-2).
+Verified: every generated-content API route returns
+`401 { ok:false, error:{code:"UNAUTHORIZED"} }` unauthenticated; lint +
+typecheck + build pass. No OpenAI/provider secrets or service-role key exposed.
+Vietnam SMS OTP provider remains **paused**; social OAuth still not needed. No
+DB/RLS/schema changes, no mobile app.
+
+**Phase 3C — 🟢 IMPLEMENTED** (Post Assistant service + mobile-ready API):
+
+```text
+- Shared server-only service: src/lib/services/post-assistant.ts
+  getPostAssistantPackage / ...ForProperty / getPostAssistantImageUrls /
+  markContentCopied / markContentScheduled / markContentPosted.
+  Composes the Generated Content + Properties + Property Images services
+  (no duplicated storage signing). Organization-scoped; cross-org / unknown /
+  archived ids → NOT_FOUND.
+- MANUAL workflow only: prepares text, returns signed image URLs, records
+  copied/scheduled/posted intent. NO auto-posting, NO Facebook/Zalo API, NO
+  social tokens, NO browser automation. (Aligns with the product principle.)
+- Thumbnails by default; full-resolution originals only via the explicit
+  image-urls endpoint (variant: "original"), and only for image ids belonging
+  to the content's property. No prompt_used / storage keys / secrets / user_id /
+  organization_id exposed. No AI calls in Post Assistant.
+- Web mark actions (markContentCopied / markContentScheduled / markContentPosted
+  in the content actions) now delegate to the service; Post Assistant page,
+  copy/open/download/share UI, pending states all unchanged.
+- API routes (cookie + Bearer auth, { ok, data } / { ok, error } envelope):
+  GET  /api/generated-contents/[id]/post-assistant
+  POST /api/generated-contents/[id]/post-assistant/image-urls
+  POST /api/generated-contents/[id]/post-assistant/copied
+  POST /api/generated-contents/[id]/post-assistant/scheduled
+  POST /api/generated-contents/[id]/post-assistant/posted
+  GET  /api/properties/[id]/generated-contents/[contentId]/post-assistant
+```
+
+Verified: every Post Assistant API route returns
+`401 { ok:false, error:{code:"UNAUTHORIZED"} }` unauthenticated; lint +
+typecheck + build pass. No auto-posting / social-token handling anywhere.
+
+**Phase 3D — 🟢 IMPLEMENTED** (Org-read alignment + authenticated API smoke):
+
+```text
+- Org-read alignment: dashboard Server-Component reads that still filtered by
+  user_id now go through the org-scoped service layer (or organization_id for
+  the dashboard stat counts). Solo behaviour unchanged; cross-org → NOT_FOUND.
+  Aligned: dashboard counts; properties list thumbnails + detail; generate;
+  edit; images; per-property content; content detail; Post Assistant page;
+  style-profile list + detail. (content list was already aligned in 3B-3.)
+- Justified user_id reads kept: account (user_profiles = personal metadata),
+  api/auth/callback (auth identity), legacy uploadPropertyImage fallback.
+- Post Assistant page still signs thumbnails (grid) + originals (actions) via
+  the Property Images service — behaviour unchanged, now org-scoped.
+- Authenticated API smoke test: scripts/smoke-authenticated-api.mjs
+  (npm run smoke:api). Signs in via Supabase anon client, calls core APIs with
+  a Bearer token, prints pass/fail. Read-only by default; never prints the
+  token; anon key only (no service-role). generate/regenerate/archive/
+  scheduled/posted are OFF by default; only idempotent "copied" behind
+  SMOKE_RUN_MUTATIONS=1, and generate behind SMOKE_RUN_GENERATE=1.
+- Docs: docs/PHASE_3D_SMOKE_TESTS.md (env vars, modes, expected output).
+```
+
+Verified: lint + typecheck + build pass; unauthenticated 401 behaviour
+unchanged. No UI/schema/RLS/auth/billing/nav changes; no auto-posting. Next:
+**Phase 4 — Team UI MVP**. Vietnam SMS OTP provider stays paused; social OAuth
+still not needed.
+
 ### Phase 4 — Team UI MVP
 
 ```text
@@ -430,6 +592,38 @@ Follow-up (later):
 ```text
 - Lazy-load / progressive loading polish.
 ```
+
+### 3b. UX Responsiveness Pass — 🟢 DONE
+
+Goal:
+
+```text
+Improve perceived performance — buttons must give immediate feedback on tap,
+without any backend / schema / API-contract changes.
+```
+
+Done:
+
+```text
+- Audited every auth, property, quick-add, image, content, style-profile and
+  Post Assistant action button/form. All server-action forms already show an
+  immediate pending state via useActionState (disabled + "Đang …" label), and
+  manual async buttons already use useTransition with disabled + loading text.
+  No fake "instant" completion for genuinely slow AI/upload steps — they keep
+  clear progress text ("Đang trích xuất…", "Đang tải ảnh lên…", "Đang tạo
+  content…").
+- Added the remaining gap: primary navigation CTAs (button-styled links that
+  route to a server-rendered page) previously gave no feedback on tap. New
+  reusable LinkButton (src/components/ui/link-button.tsx) shows an inline
+  pending spinner via next/link useLinkStatus() and blocks repeat taps while
+  navigating, with byte-for-byte identical styling.
+- Applied to the primary CTAs across key workflows: dashboard quick actions,
+  Kho nguồn (Nhập nhanh / Thủ công / empty-state create), property detail
+  (Tạo content AI / Chỉnh sửa), content empty-state, and Văn phong create.
+```
+
+Result: buttons now show immediate pending state and perceived performance
+improved with no backend, schema, RLS, auth or API-contract changes.
 
 ### 4. PWA
 

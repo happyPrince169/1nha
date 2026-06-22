@@ -16,6 +16,7 @@ import { toApiError } from "@/lib/api/errors";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { buttonVariants } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "./status-badge";
 import {
@@ -146,12 +147,14 @@ export default async function PropertiesPage({ searchParams }: Props) {
   if (properties && properties.length > 0) {
     const propertyIds = properties.map((p) => p.id);
 
+    // Phase 3D: scoped by the already org-scoped propertyIds (from
+    // listProperties) — RLS property_images_member_all backstops org access.
+    // No user_id filter so team members see cover thumbnails for org properties.
     const { data: imageRows } = await ctx.supabase
       .from("property_images")
       .select(
         "id, property_id, storage_provider, storage_path, original_key, thumbnail_key, preview_key"
       )
-      .eq("user_id", ctx.userId)
       .in("property_id", propertyIds)
       .neq("storage_path", "__pending__")
       .neq("storage_path", R2_PENDING_PATH)
@@ -197,18 +200,16 @@ export default async function PropertiesPage({ searchParams }: Props) {
           </p>
         </div>
         <div className="flex shrink-0 gap-2">
-          <Link
-            href="/dashboard/properties/quick-add"
-            className={cn(buttonVariants({ size: "sm" }))}
-          >
+          <LinkButton href="/dashboard/properties/quick-add" size="sm">
             ✨ Nhập nhanh
-          </Link>
-          <Link
+          </LinkButton>
+          <LinkButton
             href="/dashboard/properties/new"
-            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            variant="outline"
+            size="sm"
           >
             Thủ công
-          </Link>
+          </LinkButton>
         </div>
       </div>
 
@@ -265,12 +266,13 @@ export default async function PropertiesPage({ searchParams }: Props) {
                 Thử xóa bớt bộ lọc hoặc nhập từ khóa khác.
               </p>
             </div>
-            <Link
+            <LinkButton
               href={showArchived ? `${basePath}?archived=1` : basePath}
-              className={cn(buttonVariants({ variant: "outline" }), "w-full")}
+              variant="outline"
+              className="w-full"
             >
               Xóa bộ lọc
-            </Link>
+            </LinkButton>
           </div>
         ) : showArchived ? (
           <Card>
@@ -297,18 +299,16 @@ export default async function PropertiesPage({ searchParams }: Props) {
               </p>
             </div>
             <div className="flex w-full flex-col gap-2">
-              <Link
-                href="/dashboard/properties/quick-add"
-                className={cn(buttonVariants(), "w-full")}
-              >
+              <LinkButton href="/dashboard/properties/quick-add" className="w-full">
                 ✨ Nhập nhanh nguồn mới
-              </Link>
-              <Link
+              </LinkButton>
+              <LinkButton
                 href="/dashboard/properties/new"
-                className={cn(buttonVariants({ variant: "outline" }), "w-full")}
+                variant="outline"
+                className="w-full"
               >
                 Thêm căn thủ công
-              </Link>
+              </LinkButton>
             </div>
           </div>
         )

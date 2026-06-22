@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import { getPropertyById } from "@/lib/services/properties";
 import { updateProperty } from "./actions";
 import { PropertyForm } from "../../property-form";
 import { buttonVariants } from "@/components/ui/button";
@@ -19,23 +21,17 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function EditPropertyPage({ params }: Props) {
   const { id } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped read via the shared service (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
-
-  const { data: property, error } = await supabase
-    .from("properties")
-    .select(
-      "id,title,property_type,city,district,ward,street,price,area,bedrooms,bathrooms,house_direction,frontage,alley_width,legal_status,description,strengths,weaknesses,owner_note,planning_note"
-    )
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single();
-
-  if (error || !property) notFound();
+  let property;
+  try {
+    property = await getPropertyById(ctx, id);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
+  }
 
   // Bind the property id into the action on the server so the client never
   // controls which row gets updated.

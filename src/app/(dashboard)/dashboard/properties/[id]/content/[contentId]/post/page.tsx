@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
-import {
-  getPropertyImageSignedUrls,
-  R2_PENDING_PATH,
-} from "@/lib/storage/property-media";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import { getGeneratedContentForProperty } from "@/lib/services/generated-content";
+import { getPropertyById } from "@/lib/services/properties";
+import { listPropertyImages } from "@/lib/services/property-images";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { buttonVariants } from "@/components/ui/button";
@@ -27,43 +27,6 @@ type Props = {
 };
 
 // ---------------------------------------------------------------------------
-// Local row types (Supabase type-gen predates recent migrations)
-// ---------------------------------------------------------------------------
-type ContentRow = {
-  id: string;
-  platform: string | null;
-  content: string;
-  status: string | null;
-  posted_at: string | null;
-  post_url: string | null;
-  channel_name: string | null;
-  property_id: string;
-};
-
-type PropertyRow = {
-  id: string;
-  title: string;
-  city: string | null;
-  district: string | null;
-  ward: string | null;
-  price: number | null;
-  area: number | null;
-  status: string | null;
-};
-
-type ImageRow = {
-  id: string;
-  storage_path: string;
-  alt_text: string | null;
-  caption: string | null;
-  is_cover: boolean;
-  storage_provider: string | null;
-  original_key: string | null;
-  thumbnail_key: string | null;
-  preview_key: string | null;
-};
-
-// ---------------------------------------------------------------------------
 // Checklist items
 // ---------------------------------------------------------------------------
 const CHECKLIST_ITEMS = [
@@ -79,85 +42,56 @@ const CHECKLIST_ITEMS = [
 export default async function PostAssistantPage({ params }: Props) {
   const { id, contentId } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped reads via the shared services (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
-
-  // Fetch content — scoped to user + property
-  const { data: content } = await supabase
-    .from("generated_contents")
-    .select(
-      "id,platform,content,status,posted_at,post_url,channel_name,property_id"
-    )
-    .eq("id", contentId)
-    .eq("user_id", user.id)
-    .eq("property_id", id)
-    .single() as unknown as { data: ContentRow | null };
-
-  if (!content) notFound();
-
-  // Do not show the post assistant for archived content
-  if (content.status === "archived") notFound();
-
-  // Fetch property — scoped to user. Deliberately exclude sensitive notes.
-  const { data: property } = await supabase
-    .from("properties")
-    .select("id,title,city,district,ward,price,area,status")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single() as unknown as { data: PropertyRow | null };
-
-  if (!property) notFound();
-
-  // ---------------------------------------------------------------------------
-  // Fetch property images — batch signed URLs, no N+1
-  // ---------------------------------------------------------------------------
-  const { data: imageRows } = await supabase
-    .from("property_images")
-    .select(
-      "id,storage_path,alt_text,caption,is_cover,storage_provider,original_key,thumbnail_key,preview_key"
-    )
-    .eq("property_id", id)
-    .eq("user_id", user.id)
-    .neq("storage_path", "__pending__")
-    .neq("storage_path", R2_PENDING_PATH)
-    .order("is_cover", { ascending: false })
-    .order("sort_order", { ascending: true })
-    .order("created_at", { ascending: true }) as unknown as {
-      data: ImageRow[] | null;
-    };
-
-  let pickerImages: PickerImage[] = [];
-
-  if (imageRows && imageRows.length > 0) {
-    // Split by purpose to avoid loading full-resolution originals as previews:
-    //   • thumbnail signed URLs → the preview grid <img> (fast)
-    //   • original signed URLs  → download / copy / open actions (full quality)
-    // Both batched per provider; legacy Supabase rows fall back to the same
-    // path for both variants, so they keep working unchanged.
-    const [thumbById, originalById] = await Promise.all([
-      getPropertyImageSignedUrls(imageRows, supabase, { variant: "thumbnail" }),
-      getPropertyImageSignedUrls(imageRows, supabase),
-    ]);
-
-    pickerImages = imageRows
-      .map((r) => ({
-        id: r.id,
-        thumbnailUrl: thumbById.get(r.id) ?? originalById.get(r.id) ?? "",
-        originalUrl: originalById.get(r.id) ?? "",
-        altText: r.alt_text,
-        caption: r.caption,
-        isCover: r.is_cover,
-      }))
-      // Actions need a usable original; drop rows without one.
-      .filter((img) => img.originalUrl !== "");
+  // Content scoped to the property + current workspace (NOT_FOUND across orgs).
+  let content;
+  try {
+    content = await getGeneratedContentForProperty(ctx, id, contentId);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
   }
 
+  // Do not show the post assistant for archived content.
+  if (content.status === "archived") notFound();
+
+  // Property summary (sensitive notes are never rendered below).
+  let property;
+  try {
+    property = await getPropertyById(ctx, id);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Property images via the shared service. Thumbnails drive the preview grid;
+  // originals back the download / copy / open actions. Two org-scoped batches —
+  // no direct property_images query, no duplicated signing.
+  // ---------------------------------------------------------------------------
+  const [thumbItems, originalItems] = await Promise.all([
+    listPropertyImages(ctx, id, { variant: "thumbnail" }),
+    listPropertyImages(ctx, id, { variant: "original" }),
+  ]);
+  const originalUrlById = new Map(originalItems.map((i) => [i.id, i.url]));
+
+  const pickerImages: PickerImage[] = thumbItems
+    .map((i) => ({
+      id: i.id,
+      thumbnailUrl: i.url ?? originalUrlById.get(i.id) ?? "",
+      originalUrl: originalUrlById.get(i.id) ?? "",
+      altText: i.alt_text,
+      caption: i.caption,
+      isCover: i.is_cover,
+    }))
+    // Actions need a usable original; drop rows without one.
+    .filter((img) => img.originalUrl !== "");
+
   // Track page open — fire-and-forget, never blocks render
-  void trackEvent(supabase, user.id, "post_assistant_opened", {
+  void trackEvent(ctx.supabase, ctx.userId, "post_assistant_opened", {
     property_id: id,
     content_id: contentId,
   });

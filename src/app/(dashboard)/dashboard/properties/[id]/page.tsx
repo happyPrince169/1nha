@@ -2,17 +2,16 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import {
-  getPropertyImageSignedUrls,
-  R2_PENDING_PATH,
-} from "@/lib/storage/property-media";
 import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { getPropertyById } from "@/lib/services/properties";
+import { listPropertyImages } from "@/lib/services/property-images";
+import { listPropertyGeneratedContents } from "@/lib/services/generated-content";
 import { toApiError } from "@/lib/api/errors";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ArchiveButton } from "./archive-button";
@@ -68,46 +67,19 @@ export default async function PropertyDetailPage({ params }: Props) {
     throw err;
   }
 
-  const supabase = ctx.supabase;
+  // Organization-scoped reads via the shared services (Phase 3D alignment).
+  // Preview = first 3 images (thumbnails); the service excludes pending rows
+  // and applies cover/sort/created order.
+  const previewImages = (
+    await listPropertyImages(ctx, id, { variant: "thumbnail" })
+  )
+    .slice(0, 3)
+    .map((img) => ({ ...img, signedUrl: img.url ?? "" }));
 
-  // Fetch cover image (or first image) for the images section preview
-  const { data: coverImages } = await supabase
-    .from("property_images")
-    .select(
-      "id, storage_path, file_name, alt_text, is_cover, storage_provider, original_key, thumbnail_key, preview_key"
-    )
-    .eq("property_id", id)
-    .eq("user_id", ctx.userId)
-    .neq("storage_path", "__pending__")
-    .neq("storage_path", R2_PENDING_PATH)
-    .order("is_cover", { ascending: false })
-    .order("sort_order", { ascending: true })
-    .order("created_at", { ascending: true })
-    .limit(3);
-
-  // Generate signed URLs for the preview images (provider-aware, batched)
-  type CoverImageRow = NonNullable<typeof coverImages>[number];
-  type CoverImageWithUrl = CoverImageRow & { signedUrl: string };
-  let previewImages: CoverImageWithUrl[] = [];
-
-  if (coverImages && coverImages.length > 0) {
-    const urlById = await getPropertyImageSignedUrls(coverImages, supabase, {
-      variant: "thumbnail",
-    });
-    previewImages = coverImages.map((img) => ({
-      ...img,
-      signedUrl: urlById.get(img.id) ?? "",
-    }));
-  }
-
-  // Fetch the 10 most recent generated contents for this property
-  const { data: contents } = await supabase
-    .from("generated_contents")
-    .select("id, platform, content_type, content, created_at")
-    .eq("property_id", id)
-    .eq("user_id", ctx.userId)
-    .order("created_at", { ascending: false })
-    .limit(10);
+  // 10 most recent generated contents for this property.
+  const { contents } = await listPropertyGeneratedContents(ctx, id, {
+    limit: 10,
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -123,19 +95,22 @@ export default async function PropertyDetailPage({ params }: Props) {
 
       {property.status !== "archived" && (
         <div className="flex flex-col gap-2">
-          <Link
+          <LinkButton
             href={`/dashboard/properties/${id}/generate`}
-            className={cn(buttonVariants({ size: "lg" }), "h-11 w-full justify-center")}
+            size="lg"
+            className="h-11 w-full justify-center"
           >
             ✨ Tạo content AI
-          </Link>
+          </LinkButton>
           <div className="flex gap-2">
-            <Link
+            <LinkButton
               href={`/dashboard/properties/${id}/edit`}
-              className={cn(buttonVariants({ variant: "outline", size: "sm" }), "flex-1 justify-center")}
+              variant="outline"
+              size="sm"
+              className="flex-1 justify-center"
             >
               Chỉnh sửa
-            </Link>
+            </LinkButton>
             <ArchiveButton id={id} />
           </div>
         </div>

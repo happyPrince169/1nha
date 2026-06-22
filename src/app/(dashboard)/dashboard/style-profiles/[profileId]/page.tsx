@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import { getStyleProfile } from "@/lib/services/style-profiles";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import type { ContentStyleProfile, ContentStyleRules } from "@/types";
+import type { ContentStyleRules } from "@/types";
 import {
   EditProfileForm,
   SetDefaultButton,
@@ -19,22 +21,6 @@ export const metadata: Metadata = { title: "Chi tiết văn phong" };
 type Props = {
   params: Promise<{ profileId: string }>;
 };
-
-// ---------------------------------------------------------------------------
-// Local row type — Supabase type-gen doesn't know this table yet
-// ---------------------------------------------------------------------------
-type ProfileRow = Pick<
-  ContentStyleProfile,
-  | "id"
-  | "name"
-  | "description"
-  | "platform"
-  | "sample_text"
-  | "style_rules"
-  | "is_default"
-  | "created_at"
-  | "updated_at"
->;
 
 // ---------------------------------------------------------------------------
 // Label helpers
@@ -152,23 +138,17 @@ function StyleRulesDisplay({ rules }: { rules: ContentStyleRules }) {
 export default async function StyleProfileDetailPage({ params }: Props) {
   const { profileId } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped read via the shared service (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
-
-  const { data: profile } = await supabase
-    .from("content_style_profiles")
-    .select(
-      "id,name,description,platform,sample_text,style_rules,is_default,created_at,updated_at"
-    )
-    .eq("id", profileId)
-    .eq("user_id", user.id)
-    .single() as unknown as { data: ProfileRow | null };
-
-  if (!profile) notFound();
+  let profile;
+  try {
+    profile = await getStyleProfile(ctx, profileId);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
+  }
 
   const platformLabel = profile.platform
     ? (PLATFORM_LABELS[profile.platform] ?? profile.platform)

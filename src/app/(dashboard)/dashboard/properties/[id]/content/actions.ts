@@ -2,37 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 
-import { createClient } from "@/lib/supabase/server";
-import { trackEvent } from "@/lib/usage";
-
-// ---------------------------------------------------------------------------
-// Shared auth helper — returns the authenticated user or throws.
-// ---------------------------------------------------------------------------
-async function getAuthenticatedUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return { supabase, user };
-}
-
-// ---------------------------------------------------------------------------
-// Shared ownership check — verifies the content belongs to the user.
-// Returns the content row on success, null on failure.
-// ---------------------------------------------------------------------------
-async function fetchOwnedContent(
-  supabase: Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>,
-  contentId: string,
-  userId: string
-) {
-  const { data } = await supabase
-    .from("generated_contents")
-    .select("id, property_id, status")
-    .eq("id", contentId)
-    .eq("user_id", userId)
-    .single();
-  return data;
-}
+import { getRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import {
+  updateGeneratedContent,
+  archiveGeneratedContent,
+} from "@/lib/services/generated-content";
+import {
+  markContentCopied as markContentCopiedService,
+  markContentScheduled as markContentScheduledService,
+  markContentPosted as markContentPostedService,
+} from "@/lib/services/post-assistant";
 
 // ---------------------------------------------------------------------------
 // Revalidate all paths that display content for a property.
@@ -54,24 +34,14 @@ function revalidateContentPaths(propertyId: string, contentId: string) {
 // timestamp. Triggers content_copied usage event.
 // ---------------------------------------------------------------------------
 export async function markContentCopied(contentId: string): Promise<void> {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) return;
-
-  const content = await fetchOwnedContent(supabase, contentId, user.id);
-  if (!content) return;
-
-  await supabase
-    .from("generated_contents")
-    .update({ copied_at: new Date().toISOString() })
-    .eq("id", contentId)
-    .eq("user_id", user.id);
-
-  await trackEvent(supabase, user.id, "content_copied", {
-    content_id: contentId,
-    property_id: content.property_id,
-  });
-
-  revalidateContentPaths(content.property_id, contentId);
+  try {
+    const ctx = await getRequestContext();
+    const { propertyId } = await markContentCopiedService(ctx, contentId);
+    revalidateContentPaths(propertyId, contentId);
+  } catch {
+    // Swallow — fire-and-forget from the copy button; a failure just leaves
+    // copied_at unchanged, which is safe.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -86,31 +56,17 @@ export async function markContentScheduled(
   _prev: MarkScheduledState,
   formData: FormData
 ): Promise<MarkScheduledState> {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) return { error: "Bạn cần đăng nhập." };
-
-  const content = await fetchOwnedContent(supabase, contentId, user.id);
-  if (!content) return { error: "Không tìm thấy content." };
-
-  const scheduledAtRaw = formData.get("scheduled_at");
-  const scheduledAt =
-    typeof scheduledAtRaw === "string" && scheduledAtRaw.trim()
-      ? new Date(scheduledAtRaw).toISOString()
-      : null;
-
-  const { error } = await supabase
-    .from("generated_contents")
-    .update({
-      status: "scheduled",
-      scheduled_at: scheduledAt,
-    })
-    .eq("id", contentId)
-    .eq("user_id", user.id);
-
-  if (error) return { error: error.message };
-
-  revalidateContentPaths(content.property_id, contentId);
-  return { error: null };
+  try {
+    const ctx = await getRequestContext();
+    const scheduledAtRaw = formData.get("scheduled_at");
+    const { propertyId } = await markContentScheduledService(ctx, contentId, {
+      scheduledAt: typeof scheduledAtRaw === "string" ? scheduledAtRaw : null,
+    });
+    revalidateContentPaths(propertyId, contentId);
+    return { error: null };
+  } catch (err) {
+    return { error: toApiError(err).message };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,42 +82,24 @@ export async function markContentPosted(
   _prev: MarkPostedState,
   formData: FormData
 ): Promise<MarkPostedState> {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) return { error: "Bạn cần đăng nhập." };
+  try {
+    const ctx = await getRequestContext();
+    const getString = (key: string) => {
+      const v = formData.get(key);
+      return typeof v === "string" ? v : null;
+    };
 
-  const content = await fetchOwnedContent(supabase, contentId, user.id);
-  if (!content) return { error: "Không tìm thấy content." };
+    const { propertyId } = await markContentPostedService(ctx, contentId, {
+      postedAt: getString("posted_at"),
+      channelName: getString("channel_name"),
+      postUrl: getString("post_url"),
+    });
 
-  const getString = (key: string) => {
-    const v = formData.get(key);
-    return typeof v === "string" && v.trim() ? v.trim() : null;
-  };
-
-  const postedAtRaw = getString("posted_at");
-  const postedAt = postedAtRaw
-    ? new Date(postedAtRaw).toISOString()
-    : new Date().toISOString();
-
-  const { error } = await supabase
-    .from("generated_contents")
-    .update({
-      status: "posted",
-      posted_at: postedAt,
-      channel_name: getString("channel_name"),
-      post_url: getString("post_url"),
-    })
-    .eq("id", contentId)
-    .eq("user_id", user.id);
-
-  if (error) return { error: error.message };
-
-  await trackEvent(supabase, user.id, "content_marked_posted", {
-    content_id: contentId,
-    property_id: content.property_id,
-  });
-
-  revalidateContentPaths(content.property_id, contentId);
-  return { error: null };
+    revalidateContentPaths(propertyId, contentId);
+    return { error: null };
+  } catch (err) {
+    return { error: toApiError(err).message };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,24 +108,14 @@ export async function markContentPosted(
 // Sets status = 'archived'. Triggers content_archived usage event.
 // ---------------------------------------------------------------------------
 export async function archiveContent(contentId: string): Promise<void> {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) return;
-
-  const content = await fetchOwnedContent(supabase, contentId, user.id);
-  if (!content) return;
-
-  await supabase
-    .from("generated_contents")
-    .update({ status: "archived" })
-    .eq("id", contentId)
-    .eq("user_id", user.id);
-
-  await trackEvent(supabase, user.id, "content_archived", {
-    content_id: contentId,
-    property_id: content.property_id,
-  });
-
-  revalidateContentPaths(content.property_id, contentId);
+  try {
+    const ctx = await getRequestContext();
+    const content = await archiveGeneratedContent(ctx, contentId);
+    revalidateContentPaths(content.property_id, contentId);
+  } catch {
+    // Swallow — UI revalidates; a failure leaves the content unchanged, which
+    // is safe (matches the previous fire-and-forget behavior).
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,39 +132,17 @@ export async function updateContentText(
   _prev: UpdateTextState,
   formData: FormData
 ): Promise<UpdateTextState> {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) return { error: "Bạn cần đăng nhập.", success: false };
-
-  const content = await fetchOwnedContent(supabase, contentId, user.id);
-  if (!content) return { error: "Không tìm thấy content.", success: false };
-
-  const raw = formData.get("output_text");
-  if (typeof raw !== "string" || !raw.trim()) {
-    return { error: "Nội dung không được để trống.", success: false };
+  try {
+    const ctx = await getRequestContext();
+    const raw = formData.get("output_text");
+    const content = await updateGeneratedContent(ctx, contentId, {
+      content: typeof raw === "string" ? raw : "",
+    });
+    revalidateContentPaths(content.property_id, contentId);
+    return { error: null, success: true };
+  } catch (err) {
+    return { error: toApiError(err).message, success: false };
   }
-  const text = raw.trim();
-
-  const now = new Date().toISOString();
-
-  const { error } = await supabase
-    .from("generated_contents")
-    .update({
-      content: text,
-      updated_at: now,
-      edited_at: now,
-    })
-    .eq("id", contentId)
-    .eq("user_id", user.id);
-
-  if (error) return { error: error.message, success: false };
-
-  await trackEvent(supabase, user.id, "content_edited", {
-    content_id: contentId,
-    property_id: content.property_id,
-  });
-
-  revalidateContentPaths(content.property_id, contentId);
-  return { error: null, success: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -251,24 +157,15 @@ export async function updateContentNotes(
   _prev: UpdateNotesState,
   formData: FormData
 ): Promise<UpdateNotesState> {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) return { error: "Bạn cần đăng nhập." };
-
-  const content = await fetchOwnedContent(supabase, contentId, user.id);
-  if (!content) return { error: "Không tìm thấy content." };
-
-  const notes = formData.get("notes");
-  const notesValue =
-    typeof notes === "string" && notes.trim() ? notes.trim() : null;
-
-  const { error } = await supabase
-    .from("generated_contents")
-    .update({ notes: notesValue })
-    .eq("id", contentId)
-    .eq("user_id", user.id);
-
-  if (error) return { error: error.message };
-
-  revalidateContentPaths(content.property_id, contentId);
-  return { error: null };
+  try {
+    const ctx = await getRequestContext();
+    const notes = formData.get("notes");
+    const content = await updateGeneratedContent(ctx, contentId, {
+      notes: typeof notes === "string" ? notes : null,
+    });
+    revalidateContentPaths(content.property_id, contentId);
+    return { error: null };
+  } catch (err) {
+    return { error: toApiError(err).message };
+  }
 }

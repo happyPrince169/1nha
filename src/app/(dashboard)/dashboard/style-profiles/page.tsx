@@ -1,9 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { createClient } from "@/lib/supabase/server";
-import { cn } from "@/lib/utils";
-import { buttonVariants } from "@/components/ui/button";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import {
+  listStyleProfiles,
+  type StyleProfileSummary,
+} from "@/lib/services/style-profiles";
+import { LinkButton } from "@/components/ui/link-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export const metadata: Metadata = { title: "Văn phong của tôi" };
@@ -16,40 +20,21 @@ const PLATFORM_LABELS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Local row type — Supabase type-gen doesn't know this table yet
-// ---------------------------------------------------------------------------
-type ProfileRow = {
-  id: string;
-  name: string;
-  description: string | null;
-  platform: string | null;
-  is_default: boolean;
-  created_at: string;
-  style_rules: { summary?: string } | null;
-};
-
-// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 export default async function StyleProfilesPage() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped read via the shared service (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
-
-  const { data: profiles, error: profilesError } = (await supabase
-    .from("content_style_profiles")
-    .select("id,name,description,platform,is_default,created_at,style_rules")
-    .eq("user_id", user.id)
-    .order("is_default", { ascending: false })
-    .order("created_at", { ascending: false })) as unknown as {
-    data: ProfileRow[] | null;
-    error: { message: string } | null;
-  };
-
-  const error = profilesError;
+  let profiles: StyleProfileSummary[] = [];
+  let error: string | null = null;
+  try {
+    const result = await listStyleProfiles(ctx);
+    profiles = result.profiles;
+  } catch (err) {
+    error = toApiError(err).message;
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -63,12 +48,13 @@ export default async function StyleProfilesPage() {
             Dán một số bài mẫu để 1nha học cách hành văn và trình bày của bạn.
           </p>
         </div>
-        <Link
+        <LinkButton
           href="/dashboard/style-profiles/new"
-          className={cn(buttonVariants({ size: "sm" }), "shrink-0")}
+          size="sm"
+          className="shrink-0"
         >
           + Tạo mới
-        </Link>
+        </LinkButton>
       </div>
 
       {/* Query error */}
@@ -94,12 +80,9 @@ export default async function StyleProfilesPage() {
               thường viết hơn.
             </p>
           </div>
-          <Link
-            href="/dashboard/style-profiles/new"
-            className={cn(buttonVariants(), "w-full")}
-          >
+          <LinkButton href="/dashboard/style-profiles/new" className="w-full">
             Tạo văn phong mới
-          </Link>
+          </LinkButton>
         </div>
       )}
 

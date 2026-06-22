@@ -487,9 +487,251 @@ All authenticated + organization-scoped, paginated by default, same service as
 the web actions. Verified: unauthenticated requests return
 `401 { ok:false, error:{ code:"UNAUTHORIZED" } }`.
 
-**Limitations (Phase 3A):** API/service exist for Properties ONLY. Property
-images, content generation, style profiles, and Post Assistant are NOT yet
-migrated and still run through their existing Server Actions. No mobile app yet.
+**Service/API coverage:** Phase 3A covers Properties, 3B-1 Property Images,
+3B-2 Style Profiles, 3B-3 Generated Content + AI generation, and 3C the
+Post Assistant (manual posting workflow) — all below. The full broker workflow
+now has a shared service + mobile-ready API. Vietnam SMS OTP provider
+integration remains **paused** until provider credentials are finalized; social
+OAuth is still not needed; there is **no auto-posting**. No mobile app yet.
+
+### Property Images service + API (Phase 3B-1)
+
+`src/lib/services/property-images.ts` is the shared, server-only home for
+property-image business logic — consumed by both the web Server Actions
+(`.../images/actions.ts`) and the new image API routes, so web and the future
+Expo client run the same code.
+
+```text
+listPropertyImages(ctx, propertyId, { variant })           cover→sort_order→created_at; excludes pending
+getPropertyImage(ctx, propertyId, imageId, { variant })    single resource; excludes pending
+requestPropertyImageUpload(ctx, propertyId, input)         R2 presigned PUT (single file) + pending row
+requestPropertyImageUploadTargets(ctx, propertyId, input)  R2 presigned PUTs (processed main + thumbnail)
+finalizePropertyImageUpload(ctx, propertyId, { imageId })  mark row ready (mirror original_key → storage_path)
+updatePropertyImage(ctx, propertyId, imageId, input)       edit caption / alt_text
+deletePropertyImage(ctx, propertyId, imageId)              delete object(s) + row
+setPropertyCoverImage(ctx, propertyId, imageId)            clear covers, set this one
+```
+
+- **Organization-aware through the parent property:** every call first verifies
+  the property is in `ctx.organizationId`, then scopes image queries by
+  `property_id`. RLS `property_images_member_all` (scoped through the property's
+  org) is the backstop, so a guessed cross-org property/image id resolves to
+  `NOT_FOUND` — never a leak.
+- **Storage stays in one place:** the service delegates all signing/PUT/delete
+  to `src/lib/storage/property-media.ts`. Both providers preserved — Cloudflare
+  R2 (new uploads) and legacy Supabase Storage (existing rows). Pending rows
+  (`__pending__` / `__r2_pending__`) are excluded from every read.
+- **Thumbnails by default:** list/gallery resolve `variant:"thumbnail"`; full
+  originals are only signed when a caller explicitly asks (`?variant=original`).
+- The public `PropertyImageItem` returns metadata + a short-lived signed `url`
+  only — raw storage paths / R2 object keys are never serialized.
+
+```text
+GET    /api/properties/[id]/images                       list (?variant=thumbnail|original, default thumbnail)
+POST   /api/properties/[id]/images/upload-targets        presign processed main+thumbnail PUTs (step 1)
+POST   /api/properties/[id]/images/finalize              mark upload ready (step 2)  { imageId }
+PATCH  /api/properties/[id]/images/[imageId]             update caption / alt_text
+DELETE /api/properties/[id]/images/[imageId]             delete image
+POST   /api/properties/[id]/images/[imageId]/cover       set as cover
+```
+
+Same `getRequestContext()` auth (cookie + Bearer), same `{ ok, data }` /
+`{ ok, error }` envelope. The upload flow is unchanged end to end: client
+processes the image → `/upload-targets` returns presigned R2 PUT URLs → browser
+PUTs bytes directly to R2 → `/finalize`. Validation throws `VALIDATION_ERROR`
+(HTTP **422**, the established envelope status) for bad UUID/MIME/size; missing
+or cross-org ids return `NOT_FOUND` (404); unauthenticated returns 401.
+Verified: every image route returns `401 { ok:false, error:{code:"UNAUTHORIZED"} }`
+without a session. No service-role key and no R2/storage secrets are ever
+exposed — only short-lived signed URLs.
+
+### Style Profiles service + API (Phase 3B-2)
+
+`src/lib/services/style-profiles.ts` is the shared, server-only home for
+content-style-profile ("Văn phong") logic — consumed by both the web Server
+Actions (`.../style-profiles/actions.ts`) and the new style-profile API routes,
+so web and the future Expo client run the same code.
+
+```text
+listStyleProfiles(ctx, { platform? })             org-scoped; default first → newest; { profiles, defaultProfileId }
+getStyleProfile(ctx, id)                          single resource (incl. sample_text); NOT_FOUND across orgs
+getDefaultStyleProfile(ctx)                        the org's default profile, or null
+createStyleProfile(ctx, input)                    validate → AI analyze sample → insert (style_rules JSONB)
+updateStyleProfile(ctx, id, input)                edit name / description / is_default
+setDefaultStyleProfile(ctx, id)                   clear org default, set this one
+deleteStyleProfile(ctx, id)                       org-scoped delete
+```
+
+- **Organization-scoped:** all reads/writes filter by `ctx.organizationId`;
+  RLS `content_style_profiles_member_all` (org-membership) is the backstop, so a
+  guessed cross-org id resolves to `NOT_FOUND` — never a leak. Inserts set
+  `user_id` (legacy, kept for the existing own-RLS policies) + `organization_id`
+  + `created_by`.
+- **One default per org:** setting a default clears the org's previous default
+  first, then sets the target — achieved purely in service logic (no schema
+  change; the legacy per-user partial unique index remains).
+- `style_rules` is produced by `analyzeContentStyle()` and stored as JSONB; it
+  is NOT user-editable, so no client-supplied JSON is trusted. Editable inputs
+  are `name` (required, ≤100), `description` (optional, ≤2000), `platform`
+  (whitelist), `sample_text` (required, ≤20000). The public payload omits
+  `user_id` / `organization_id` / `created_by`; `sample_text` is returned only
+  on the single-resource read, not in lists.
+
+```text
+GET    /api/style-profiles            list  → { profiles, defaultProfileId }
+POST   /api/style-profiles            create (analyzes sample) → { profile }
+GET    /api/style-profiles/[id]       fetch one → { profile }
+PATCH  /api/style-profiles/[id]       update → { profile }
+DELETE /api/style-profiles/[id]       delete → { id }
+POST   /api/style-profiles/[id]/default  set default → { profile, defaultProfileId }
+```
+
+Same `getRequestContext()` auth (cookie + Bearer), same `{ ok, data }` /
+`{ ok, error }` envelope. Validation throws `VALIDATION_ERROR` (HTTP **422**,
+the established envelope status); missing/cross-org ids return `NOT_FOUND`
+(404); unauthenticated returns 401. Verified: every style-profile route returns
+`401 { ok:false, error:{code:"UNAUTHORIZED"} }` without a session.
+
+**Content-generation compatibility:** the generate page/action still read +
+select style profiles and pass `style_rules` to the AI prompt exactly as
+before. Generation itself is migrated in **Phase 3B-3** (below).
+
+### Generated Content service + API (Phase 3B-3)
+
+`src/lib/services/generated-content.ts` is the shared, server-only home for
+generated-content + AI content-generation logic — consumed by both the web
+Server Actions (generate / edit / notes / archive) and the new generated-content
+API routes, so web and the future Expo client run the same code. It **depends
+on** the Properties service (org-scoped property access) and the Style Profiles
+service (org-scoped voice lookup).
+
+```text
+listGeneratedContents(ctx, { platform?, status?, q?, limit? })   org-scoped; { contents, nextPage }
+listPropertyGeneratedContents(ctx, propertyId, { status?, limit? })  property-scoped; { contents }
+getGeneratedContent(ctx, contentId)                              single resource
+getGeneratedContentForProperty(ctx, propertyId, contentId)       single, property-scoped
+generateContentForProperty(ctx, propertyId, input)              build prompt → AI → persist
+regenerateGeneratedContent(ctx, contentId, input?)             new variation (parent_content_id)
+updateGeneratedContent(ctx, contentId, { content?, title?, notes? })  edit; sets edited_at on body change
+archiveGeneratedContent(ctx, contentId)                          status = 'archived'
+```
+
+- **Organization-scoped:** reads/writes filter by `ctx.organizationId`; RLS
+  `generated_contents_member_all` is the backstop. Property access is verified
+  via `getPropertyById` and a selected style profile via `getStyleProfile`, so a
+  guessed cross-org property / content / style-profile id resolves to
+  `NOT_FOUND` — never a leak. Inserts set `user_id` (legacy) + `organization_id`
+  + `created_by`.
+- **AI behaviour unchanged:** `buildPropertyPrompt` + the `"tone:<id>"` /
+  `"style:<id>"` voice resolution are byte-for-byte the same; a selected style
+  profile's `style_rules` are injected exactly as before and sample text is
+  never sent verbatim. `prompt_used` is stored but **never** returned to clients,
+  and `user_id` / `organization_id` / `created_by` are omitted from payloads.
+- **No AI on reads:** list/get never call the model. Generation/regeneration are
+  the only AI calls and keep the existing honest pending UX (no fake instant
+  completion).
+
+```text
+GET    /api/generated-contents                          list → { contents, nextPage }
+GET    /api/generated-contents/[id]                     fetch → { content }
+PATCH  /api/generated-contents/[id]                     update → { content }
+POST   /api/generated-contents/[id]/regenerate          new variation → { content }
+POST   /api/generated-contents/[id]/archive             archive → { id, archived: true }
+GET    /api/properties/[id]/generated-contents          property list → { contents }
+POST   /api/properties/[id]/generated-contents/generate generate → { content }
+```
+
+Same `getRequestContext()` auth (cookie + Bearer), same `{ ok, data }` /
+`{ ok, error }` envelope. Validation throws `VALIDATION_ERROR` (HTTP **422**);
+missing/cross-org ids return `NOT_FOUND` (404); unauthenticated returns 401.
+Verified: every generated-content route returns
+`401 { ok:false, error:{code:"UNAUTHORIZED"} }` without a session. No OpenAI /
+provider secrets or service-role key are ever exposed. The web generate page,
+content detail page, "Giọng văn" selection, and prompt strategy are unchanged;
+the `/dashboard/content` list now reads through the service. Post Assistant
+status actions move to the Post Assistant service in **Phase 3C** (below).
+
+### Post Assistant service + API (Phase 3C)
+
+`src/lib/services/post-assistant.ts` is the shared, server-only home for the
+**manual** posting-helper workflow — consumed by the web Server Actions
+(mark copied / scheduled / posted) and the new Post Assistant API routes.
+
+> **Manual workflow only.** Post Assistant prepares post text, returns signed
+> image URLs, and records the broker's copied/scheduled/posted intent. It does
+> **NOT** post to Facebook / Zalo / TikTok, store social tokens, automate a
+> browser, scrape, or call any social API. There is no auto-posting anywhere.
+
+```text
+getPostAssistantPackage(ctx, contentId, { includeImages? })          content + property summary + thumbnails + posting
+getPostAssistantPackageForProperty(ctx, propertyId, contentId, ...)  property-scoped variant
+getPostAssistantImageUrls(ctx, contentId, { imageIds, variant })     explicit signed URLs (only way to get originals)
+markContentCopied(ctx, contentId)                                    sets copied_at
+markContentScheduled(ctx, contentId, { scheduledAt })                status = 'scheduled'
+markContentPosted(ctx, contentId, { postedAt, channelName, postUrl }) status = 'posted'
+```
+
+- **Composition, not duplication:** content access is verified via the
+  Generated Content service, parent-property access via the Properties service,
+  and image URLs via the Property Images service / `property-media` abstraction —
+  so storage signing stays in one place. All reads are org-scoped; cross-org /
+  unknown / archived ids resolve to `NOT_FOUND`.
+- **Thumbnails by default:** the package signs only thumbnail URLs. Originals
+  are returned **exclusively** by `image-urls` with `variant:"original"`, and
+  only for image ids that belong to the content's property (others → 404), so
+  clients never pull full-resolution images on screen load.
+- **No leakage:** payloads expose only the content body/metadata, a public
+  property summary (no owner/planning notes), thumbnail URLs, and posting
+  status. `prompt_used`, raw R2 keys / Supabase paths, storage secrets, and
+  `user_id` / `organization_id` / `created_by` are never returned. No AI is
+  called anywhere in Post Assistant.
+
+```text
+GET  /api/generated-contents/[id]/post-assistant             package (thumbnails)
+POST /api/generated-contents/[id]/post-assistant/image-urls  { imageIds, variant? } → signed URLs
+POST /api/generated-contents/[id]/post-assistant/copied      mark copied  → { posting }
+POST /api/generated-contents/[id]/post-assistant/scheduled   { scheduledAt? } → { posting }
+POST /api/generated-contents/[id]/post-assistant/posted      { postedAt?, channelName?, postUrl? } → { posting }
+GET  /api/properties/[id]/generated-contents/[contentId]/post-assistant   property-scoped package
+```
+
+Same `getRequestContext()` auth (cookie + Bearer), same `{ ok, data }` /
+`{ ok, error }` envelope. Validation throws `VALIDATION_ERROR` (HTTP **422**);
+missing/cross-org/archived ids return `NOT_FOUND` (404); unauthenticated returns
+401. Verified: every Post Assistant route returns
+`401 { ok:false, error:{code:"UNAUTHORIZED"} }` without a session. The web Post
+Assistant page, copy/open/download/share behaviour, and mark-posted UI are
+unchanged (the mark actions now delegate to this service).
+
+### Org-read alignment + API smoke (Phase 3D)
+
+Hardening pass before Team UI. The remaining dashboard Server-Component reads
+that still filtered by `user_id` now go through the org-scoped service layer, so
+team access becomes correct (solo behaviour unchanged; cross-org → `NOT_FOUND`):
+
+- `dashboard` stat counts → `organization_id` (via `tryGetRequestContext`).
+- properties **list** thumbnails → org-scoped `property_id IN (...)` + RLS (no
+  `user_id`); **detail** → `listPropertyImages` + `listPropertyGeneratedContents`.
+- generate / edit / images / per-property content pages → `getPropertyById`,
+  `listStyleProfiles`, `listPropertyImages`, `listPropertyGeneratedContents`.
+- content detail + Post Assistant pages → `getGeneratedContentForProperty`,
+  `getStyleProfile`, `getPropertyById`, `listPropertyImages` (the Post Assistant
+  page still signs thumbnails for the grid + originals for actions, unchanged).
+- style-profile list/detail → `listStyleProfiles` / `getStyleProfile`.
+
+Intentionally still `user_id`-scoped (justified): `account` (`user_profiles` is
+personal metadata), `api/auth/callback` (auth identity), and the legacy
+Supabase-Storage `uploadPropertyImage` fallback action.
+
+**Authenticated smoke test:** `scripts/smoke-authenticated-api.mjs`
+(`npm run smoke:api`) signs in via the Supabase anon client, then calls the core
+APIs with a Bearer token. Read-only by default (no OpenAI, no archive, no
+scheduled/posted); the token is never printed; only the anon key is used. See
+`docs/PHASE_3D_SMOKE_TESTS.md`.
+
+**Next:** **Phase 4 — Team UI MVP** (workspace settings, members, invites,
+roles). Vietnam SMS OTP provider stays paused; social OAuth still not needed; no
+auto-posting.
 
 ### API authentication contract (Phase 3A.1)
 

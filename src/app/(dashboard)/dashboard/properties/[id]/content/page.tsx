@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import { getPropertyById } from "@/lib/services/properties";
+import { listPropertyGeneratedContents } from "@/lib/services/generated-content";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -63,34 +66,31 @@ export default async function PropertyContentPage({
   const { id } = await params;
   const { status: statusParam } = await searchParams;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped reads via the shared services (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
+  // Fetch property (workspace access check; NOT_FOUND across orgs).
+  let property;
+  try {
+    property = await getPropertyById(ctx, id);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
+  }
 
-  // Fetch property (ownership check)
-  const { data: property } = await supabase
-    .from("properties")
-    .select("id, title, status")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single();
-
-  if (!property) notFound();
-
-  // Fetch all contents for this property (no limit — broker needs full picture)
-  const { data: allContents, error } = await supabase
-    .from("generated_contents")
-    .select(
-      "id, platform, content_type, content, status, created_at, copied_at, posted_at, channel_name"
-    )
-    .eq("property_id", id)
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
-
-  const contents = allContents ?? [];
+  // All contents for this property (broker needs the full picture; capped at
+  // the service's max list size, far above any realistic per-property count).
+  let contents: Awaited<
+    ReturnType<typeof listPropertyGeneratedContents>
+  >["contents"] = [];
+  let error: string | null = null;
+  try {
+    const result = await listPropertyGeneratedContents(ctx, id, { limit: 200 });
+    contents = result.contents;
+  } catch (err) {
+    error = toApiError(err).message;
+  }
 
   // Status summary counts
   const counts: Record<ContentStatus, number> = {
@@ -227,7 +227,7 @@ export default async function PropertyContentPage({
       {/* Error */}
       {error && (
         <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error.message}
+          {error}
         </p>
       )}
 

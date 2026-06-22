@@ -2,11 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
-import {
-  getPropertyImageSignedUrls,
-  R2_PENDING_PATH,
-} from "@/lib/storage/property-media";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import { getPropertyById } from "@/lib/services/properties";
+import { listPropertyImages } from "@/lib/services/property-images";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,54 +19,32 @@ type Props = { params: Promise<{ id: string }> };
 export default async function PropertyImagesPage({ params }: Props) {
   const { id } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped reads via the shared services (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
+  // Verify the property is in the current workspace before rendering.
+  let property;
+  try {
+    property = await getPropertyById(ctx, id);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
+  }
 
-  // Auth gate: verify property belongs to current user
-  const { data: property } = await supabase
-    .from("properties")
-    .select("id, title, status")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single();
-
-  if (!property) notFound();
-
-  // Fetch images ordered: cover first, then by sort_order, then created_at.
-  // Exclude not-yet-finalized rows from either provider.
-  const { data: images, error } = await supabase
-    .from("property_images")
-    .select(
-      "id, storage_path, file_name, mime_type, size_bytes, alt_text, caption, sort_order, is_cover, created_at, storage_provider, original_key, thumbnail_key, preview_key"
-    )
-    .eq("property_id", id)
-    .eq("user_id", user.id)
-    .neq("storage_path", "__pending__")
-    .neq("storage_path", R2_PENDING_PATH)
-    .order("is_cover", { ascending: false })
-    .order("sort_order", { ascending: true })
-    .order("created_at", { ascending: true });
-
-  // Generate signed URLs for all images — batched per provider by the abstraction.
-  type ImageRow = NonNullable<typeof images>[number];
-  type ImageWithUrl = ImageRow & { signedUrl: string };
-
-  let imagesWithUrls: ImageWithUrl[] = [];
-
-  if (images && images.length > 0) {
-    // Gallery grid is a preview surface — prefer thumbnails for fast loading.
-    // Falls back to preview_key → original_key (and legacy Supabase paths).
-    const urlById = await getPropertyImageSignedUrls(images, supabase, {
-      variant: "thumbnail",
-    });
-    imagesWithUrls = images.map((img) => ({
-      ...img,
-      signedUrl: urlById.get(img.id) ?? "",
-    }));
+  // Gallery grid is a preview surface — thumbnails for fast loading. The
+  // service excludes not-yet-finalized rows and applies cover/sort/created order.
+  let imagesWithUrls: Array<
+    Awaited<ReturnType<typeof listPropertyImages>>[number] & {
+      signedUrl: string;
+    }
+  > = [];
+  let error: string | null = null;
+  try {
+    const items = await listPropertyImages(ctx, id, { variant: "thumbnail" });
+    imagesWithUrls = items.map((img) => ({ ...img, signedUrl: img.url ?? "" }));
+  } catch (err) {
+    error = toApiError(err).message;
   }
 
   const canUpload = property.status !== "archived";
@@ -107,7 +84,7 @@ export default async function PropertyImagesPage({ params }: Props) {
       {/* Error */}
       {error && (
         <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error.message}
+          {error}
         </p>
       )}
 

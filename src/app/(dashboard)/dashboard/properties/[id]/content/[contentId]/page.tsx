@@ -2,7 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import { getGeneratedContentForProperty } from "@/lib/services/generated-content";
+import { getStyleProfile } from "@/lib/services/style-profiles";
+import { getPropertyById } from "@/lib/services/properties";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -67,65 +71,39 @@ function formatDate(iso: string | null): string {
 export default async function ContentOutputPage({ params }: Props) {
   const { id, contentId } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped reads via the shared services (Phase 3D alignment).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
-
-  // Supabase type-gen predates the workspace + edit migrations, so we
-  // cast the result with a local type that includes all columns we select.
-  type ContentRow = {
-    id: string;
-    platform: string | null;
-    tone: string | null;
-    content_type: string | null;
-    content: string;
-    created_at: string;
-    updated_at: string | null;
-    edited_at: string | null;
-    property_id: string;
-    status: string | null;
-    copied_at: string | null;
-    scheduled_at: string | null;
-    posted_at: string | null;
-    post_url: string | null;
-    channel_name: string | null;
-    notes: string | null;
-    style_profile_id: string | null;
-  };
-
-  const { data: content, error } = await supabase
-    .from("generated_contents")
-    .select("id,platform,tone,content_type,content,created_at,updated_at,edited_at,property_id,status,copied_at,scheduled_at,posted_at,post_url,channel_name,notes,style_profile_id")
-    .eq("id", contentId)
-    .eq("user_id", user.id)
-    .eq("property_id", id)
-    .single() as unknown as { data: ContentRow | null; error: unknown };
-
-  if (error || !content) notFound();
-
-  // Resolve the style-profile name for display (scoped to user). Best-effort:
-  // a deleted profile or null id simply shows nothing.
-  let styleProfileName: string | null = null;
-  if (content.style_profile_id) {
-    const { data: profile } = await supabase
-      .from("content_style_profiles")
-      .select("name")
-      .eq("id", content.style_profile_id)
-      .eq("user_id", user.id)
-      .single();
-    styleProfileName = (profile?.name as string | null) ?? null;
+  // Content scoped to the property + current workspace (NOT_FOUND across orgs).
+  let content;
+  try {
+    content = await getGeneratedContentForProperty(ctx, id, contentId);
+  } catch (err) {
+    if (toApiError(err).code === "NOT_FOUND") notFound();
+    throw err;
   }
 
-  // Fetch property for the header and content workspace link
-  const { data: property } = await supabase
-    .from("properties")
-    .select("id,title")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .single();
+  // Resolve the style-profile name for display. Best-effort: a deleted or
+  // inaccessible profile simply shows nothing (unchanged behavior).
+  let styleProfileName: string | null = null;
+  if (content.style_profile_id) {
+    try {
+      const profile = await getStyleProfile(ctx, content.style_profile_id);
+      styleProfileName = profile.name;
+    } catch {
+      styleProfileName = null;
+    }
+  }
+
+  // Property header (best-effort; the content already confirmed access).
+  let property: { id: string; title: string } | null = null;
+  try {
+    const p = await getPropertyById(ctx, id);
+    property = { id: p.id, title: p.title };
+  } catch {
+    property = null;
+  }
 
   const status = (content.status ?? "draft") as ContentStatus;
   const isArchived = status === "archived";

@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { createClient } from "@/lib/supabase/server";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { toApiError } from "@/lib/api/errors";
+import {
+  listGeneratedContents,
+  type GeneratedContentListItem,
+} from "@/lib/services/generated-content";
 import { cn } from "@/lib/utils";
-import { buttonVariants } from "@/components/ui/button";
+import { LinkButton } from "@/components/ui/link-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ContentFilters, PLATFORM_LABELS, TYPE_LABELS } from "./content-filters";
@@ -15,8 +20,6 @@ export const metadata: Metadata = { title: "Nội dung" };
 type Props = {
   searchParams: Promise<{ platform?: string; status?: string; q?: string }>;
 };
-
-const VALID_STATUSES = new Set(["draft", "scheduled", "posted", "archived"]);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,54 +47,25 @@ function platformBadgeClass(platform: string): string {
   }
 }
 
-const VALID_PLATFORMS = new Set(["facebook", "zalo", "tiktok"]);
-
 // ---------------------------------------------------------------------------
 // Page (Server Component)
 // ---------------------------------------------------------------------------
 export default async function ContentHistoryPage({ searchParams }: Props) {
   const { platform, status, q } = await searchParams;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Organization-scoped read via the shared service (platform/status filters +
+  // in-memory q search are handled there, identical to before).
+  const ctx = await tryGetRequestContext();
+  if (!ctx) return null;
 
-  if (!user) return null;
-
-  // Build query — join to properties so we can show the title
-  let query = supabase
-    .from("generated_contents")
-    .select(
-      "id, platform, content_type, content, status, created_at, copied_at, property_id, properties(id, title)"
-    )
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(200);
-
-  // Server-side platform filter
-  if (platform && VALID_PLATFORMS.has(platform)) {
-    query = query.eq("platform", platform);
+  let filtered: GeneratedContentListItem[] = [];
+  let errorMsg: string | null = null;
+  try {
+    const result = await listGeneratedContents(ctx, { platform, status, q });
+    filtered = result.contents;
+  } catch (err) {
+    errorMsg = toApiError(err).message;
   }
-
-  // Server-side status filter
-  if (status && VALID_STATUSES.has(status)) {
-    query = query.eq("status", status);
-  }
-
-  const { data: contents, error } = await query;
-
-  // Client-side search: match against property title OR content text.
-  // Kept in JS to avoid PostgREST ilike-on-join limitations.
-  const trimQ = q?.trim().toLowerCase() ?? "";
-  const filtered = trimQ
-    ? (contents ?? []).filter((c) => {
-        const title =
-          (c.properties as { title?: string } | null)?.title?.toLowerCase() ?? "";
-        const body = c.content.toLowerCase();
-        return title.includes(trimQ) || body.includes(trimQ);
-      })
-    : (contents ?? []);
 
   return (
     <div className="flex flex-col gap-4">
@@ -140,14 +114,14 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
       <ContentFilters />
 
       {/* Error */}
-      {error && (
+      {errorMsg && (
         <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error.message}
+          {errorMsg}
         </p>
       )}
 
       {/* Empty state */}
-      {!error && filtered.length === 0 && (
+      {!errorMsg && filtered.length === 0 && (
         q || platform ? (
           <Card>
             <CardHeader>
@@ -168,12 +142,9 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
                 Tạo content từ một căn trong kho nguồn để bắt đầu.
               </p>
             </div>
-            <Link
-              href="/dashboard/properties"
-              className={cn(buttonVariants(), "w-full")}
-            >
+            <LinkButton href="/dashboard/properties" className="w-full">
               🗂️ Vào kho nguồn
-            </Link>
+            </LinkButton>
           </div>
         )
       )}
@@ -182,9 +153,7 @@ export default async function ContentHistoryPage({ searchParams }: Props) {
       <div className="flex flex-col gap-3">
         {filtered.map((c) => {
           const propertyId = c.property_id;
-          const propertyTitle =
-            (c.properties as { id?: string; title?: string } | null)?.title ??
-            "—";
+          const propertyTitle = c.property_title ?? "—";
           const preview = c.content.slice(0, 120).trimEnd();
           const hasMore = c.content.length > 120;
           const contentStatus = (c.status ?? "draft") as ContentStatus;
