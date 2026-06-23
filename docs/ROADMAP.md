@@ -384,9 +384,31 @@ against the spec examples.
 ```
 
 Verified: lint + typecheck + build pass; the 5-decimal rule checked against the
-spec examples (price + decimal + formatVND + round-trip). Next: **Phase 4 —
-Team UI MVP**. Vietnam SMS OTP provider stays paused; social OAuth still not
-needed.
+spec examples (price + decimal + formatVND + round-trip).
+
+**Phase 3G — 🟢 IMPLEMENTED** (bare-number price rule for the price field):
+
+```text
+- parsePriceToVnd now reads a UNIT-LESS price the way a broker means it:
+    bare decimal (8.35 / 8,35 / 3,5 / 8.123456789) → tỷ, unit rounded to 5dp
+      (8.350000000 → 8_350_000_000 · 8.123456789 → 8_123_460_000)
+    bare integer < 100        → tỷ  ("8" → 8e9 · "12" → 12e9)
+    bare integer ≥ 1_000_000  → raw VND  ("8350000000" unchanged)
+    bare integer 100…999_999  → AMBIGUOUS → null → existing validation error
+      (e.g. "850" could be 850 triệu or 850 tỷ; broker must add a unit)
+  NOTE: the prose hint "< 1000 → tỷ" conflicts with the explicit
+  parsePriceToVnd("850") === null assertion, so the implemented tỷ cutoff is 100
+  (satisfies 8/12 → tỷ AND 850 → null). A NUMBER argument stays raw VND (API).
+- Unchanged: all unit expressions (8 tỷ 650 / 850 triệu / 3,5 tỷ /
+  8,123456789 tỷ), raw VND ≥ 1e6, area/frontage/alley 5-decimal rounding,
+  formatVND/formatPriceForInput, the free-text price input (no inputMode), and
+  the "Giá (tỷ)" filters (separate parsePriceFilterTy — bare = tỷ per label).
+- DB unchanged (price still integer raw VND).
+```
+
+Verified: lint + typecheck + build pass; bare + unit + raw-VND + ambiguous +
+round-trip checked against the spec examples. Next: **Phase 4 — Team UI MVP**.
+Vietnam SMS OTP provider stays paused; social OAuth still not needed.
 
 ### Phase 4 — Team UI MVP
 

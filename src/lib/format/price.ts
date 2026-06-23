@@ -131,12 +131,28 @@ export function hasVietnamesePriceUnit(text: string): boolean {
   return /t[ỷyỉi]|tri[eệễ]u|tr\b/i.test(text);
 }
 
+// Bare-number (no-unit) thresholds for the PRICE FIELD. A broker typing "8.35"
+// almost always means 8.35 tỷ, not 8.35 VND — so bare decimals, and small bare
+// integers, are read as tỷ; only large bare integers are raw VND.
+const BARE_INT_TY_MAX = 100; // bare integer < 100 → tỷ ("8" → 8 tỷ, "12" → 12 tỷ)
+const BARE_RAW_VND_MIN = 1_000_000; // bare integer ≥ 1e6 → raw VND ("8350000000")
+
 /**
- * Parse a broker-typed price (Vietnamese expression OR raw VND) into an integer
- * VND amount. Returns null for empty/invalid — never NaN/Infinity.
- *   "8 tỷ 650" / "8.65 tỷ" / "8,65 tỷ" → 8_650_000_000
- *   "850 triệu" / "850tr"              → 850_000_000
- *   "8650000000" / 8650000000          → 8_650_000_000   (bare = raw VND)
+ * Parse a broker-typed price (Vietnamese expression, bare decimal, or raw VND)
+ * into an integer VND amount. Returns null for empty/invalid/AMBIGUOUS — never
+ * NaN/Infinity. The price unit (tỷ/triệu, or the bare-as-tỷ value) is rounded to
+ * 5 decimals before conversion; the final VND is always an integer.
+ *
+ *   "8 tỷ 650" / "8.65 tỷ" / "8,65 tỷ"  → 8_650_000_000   (unit)
+ *   "850 triệu" / "850tr"               → 850_000_000     (unit)
+ *   "8.35" / "8,35" / "3,5"             → ×tỷ → 8_350_000_000 / 3_500_000_000
+ *   "8.123456789"                       → 8.12346 tỷ → 8_123_460_000
+ *   "8" / "12"                          → bare int < 100 → 8/12 tỷ
+ *   "8350000000" / 8350000000           → bare int ≥ 1e6 → raw VND
+ *   "850"                               → null (ambiguous: 850 triệu? 850 tỷ?)
+ *
+ * NOTE: a NUMBER argument is always treated as raw VND (programmatic/API
+ * contract) — the bare-as-tỷ heuristic applies to the text price field only.
  */
 export function parsePriceToVnd(
   input: string | number | null | undefined
@@ -148,14 +164,28 @@ export function parsePriceToVnd(
   const t = String(input).trim();
   if (!t) return null;
 
+  // 1. Explicit Vietnamese unit expression (tỷ/triệu/tr) — unit rounded to 5dp.
   const vn = parseVietnamesePrice(t);
   if (vn !== undefined) return vn > 0 ? vn : null;
 
-  // No VN unit → treat as a raw VND number (comma/dot/thousands tolerant).
+  // 2. Bare number (no unit), comma/dot/thousands tolerant.
   const cleaned = t.replace(/[^0-9.,]/g, "");
   if (!cleaned) return null;
   const n = parseLooseNumber(cleaned);
-  return n !== null && n > 0 ? Math.round(n) : null;
+  if (n === null || n <= 0) return null;
+
+  // A bare DECIMAL is unambiguously a unit value → tỷ (rounded to 5 decimals).
+  if (!Number.isInteger(n)) {
+    return Math.round(
+      roundToDecimalPlaces(n, PRICE_UNIT_DECIMALS) * 1_000_000_000
+    );
+  }
+
+  // A bare INTEGER: small → tỷ; large → raw VND; middle band → ambiguous (null,
+  // so validation asks the broker to add a unit instead of saving the wrong value).
+  if (n < BARE_INT_TY_MAX) return Math.round(n * 1_000_000_000); // tỷ
+  if (n >= BARE_RAW_VND_MIN) return Math.round(n); // raw VND
+  return null; // 100 … 999_999 → ambiguous
 }
 
 /** Up to `maxDecimals` places, trailing zeros dropped (round-trip helper). */

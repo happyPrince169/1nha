@@ -524,10 +524,30 @@ client never diverge):
 parseLooseNumber(s)      dot OR comma decimal, thousands-tolerant → number|null
 parseVietnamesePrice(s)  "8 tỷ 650" / "850tr" / "3,5 tỷ" → integer VND | undefined
 hasVietnamesePriceUnit(s) detects a tỷ/triệu/tr unit in the text
-parsePriceToVnd(in)      VN expression OR raw VND → integer VND | null (no NaN)
+parsePriceToVnd(in)      VN expression / bare number / raw VND → integer VND | null
 formatPriceForInput(vnd) raw VND → human-friendly editable string, ONLY when it
                          round-trips exactly (else raw VND — never lossy)
 ```
+
+**Bare-number rule in the price field** (`parsePriceToVnd`, string input only —
+a NUMBER argument is always raw VND for the API contract): a broker who types
+"8.35" means 8.35 tỷ, not 8.35 VND, so:
+
+```text
+bare DECIMAL (8.35 / 8,35 / 3,5 / 8.123456789) → ×tỷ, unit rounded to 5 decimals
+  8.350000000 → 8.35 tỷ → 8_350_000_000 · 8.123456789 → 8.12346 tỷ → 8_123_460_000
+bare INTEGER:
+  < 100         → tỷ        "8" → 8_000_000_000 · "12" → 12_000_000_000
+  ≥ 1_000_000   → raw VND   "8350000000" → 8_350_000_000
+  100 … 999_999 → AMBIGUOUS → null (could be "850 triệu" or "850 tỷ")
+                  "850" → null → the existing "Vui lòng nhập giá (VND) hợp lệ."
+                  validation; broker adds a unit ("850 triệu" / "8 tỷ 650").
+```
+
+The middle band is rejected (not silently saved wrong). Explicit unit
+expressions and raw VND ≥ 1e6 are never affected. The "Giá (tỷ)"-labelled list
+FILTERS keep their own rule (bare number = tỷ; see `parsePriceFilterTy`) — they
+do NOT use `parsePriceToVnd`, so a bare filter value stays tỷ per its label.
 
 - **Manual price input** is a free-form text field — `type="text"` with **no
   `inputMode`** at all (and no pattern/step/min/max). `inputMode="decimal"` /
