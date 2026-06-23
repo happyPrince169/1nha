@@ -593,6 +593,41 @@ Follow-up (later):
 - Lazy-load / progressive loading polish.
 ```
 
+### 3a. Optional images in the create-property form — 🟢 DONE
+
+Goal:
+
+```text
+Adding a new source should feel like one flow: enter property fields AND pick
+photos, then save — instead of save-first, then a separate images page.
+```
+
+Done:
+
+```text
+- /dashboard/properties/new gained an optional "Hình ảnh căn nhà" section
+  (multi-select, previews, remove-before-submit). Mobile-first, consistent UI.
+- One flow to the user, two safe technical steps to the system:
+    1. createPropertyWithImages(formData) → { ok, propertyId }  (fields only;
+       a no-redirect sibling of createProperty)
+    2. if images → uploadPropertyImagesToR2(propertyId, files): per image,
+       process client-side → presign R2 targets → PUT main + thumbnail direct
+       to R2 → finalize. NO image bytes pass through the create Server Action.
+    3. redirect to /properties/[id], or /properties/[id]/images?upload=partial
+       when some uploads failed (the property is NEVER rolled back).
+- Shared client helper src/lib/images/upload-property-images.ts
+  (uploadProcessedPropertyImage / uploadPropertyImagesToR2), reused by BOTH the
+  create form and the existing images page (image-upload-form refactored onto
+  it — no duplicated R2 PUT/finalize logic). Request/finalize actions injected,
+  so the helper has no app-route coupling.
+- PropertyFields extracted from PropertyForm so create-with-images + edit share
+  the same fields. Generic PropertyImagePicker component prepared for a future
+  Quick Add reuse.
+- Honest progress text + disabled/anti-double-submit; friendly Vietnamese
+  errors (non-image / HEIC / process / upload). Same R2 + Supabase-legacy
+  architecture; no schema/RLS/auth/nav changes; separate images page preserved.
+```
+
 ### 3b. UX Responsiveness Pass — 🟢 DONE
 
 Goal:

@@ -58,6 +58,31 @@ export function PropertyForm({
     <form action={formAction} className="flex flex-col gap-4">
       {state.error && <FormError>{state.error}</FormError>}
 
+      <PropertyFields defaultValues={defaultValues} disabled={isPending} />
+
+      <Button type="submit" className="h-11 w-full" disabled={isPending}>
+        {isPending ? "Đang lưu…" : submitLabel}
+      </Button>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PropertyFields — the shared property field cards (no <form>, no submit).
+//
+// Reused by the standard PropertyForm (create/edit) and the image-enabled
+// create form (NewPropertyForm), so the field layout is never duplicated.
+// ---------------------------------------------------------------------------
+export function PropertyFields({
+  defaultValues = {},
+  disabled = false,
+}: {
+  defaultValues?: PropertyFormDefaults;
+  disabled?: boolean;
+}) {
+  const isPending = disabled;
+  return (
+    <>
       <Card>
         <CardHeader>
           <CardTitle>Thông tin cơ bản</CardTitle>
@@ -337,11 +362,7 @@ export function PropertyForm({
           </Field>
         </CardContent>
       </Card>
-
-      <Button type="submit" className="h-11 w-full" disabled={isPending}>
-        {isPending ? "Đang lưu…" : submitLabel}
-      </Button>
-    </form>
+    </>
   );
 }
 

@@ -14,10 +14,14 @@ import { ImageCard } from "./image-card";
 
 export const metadata: Metadata = { title: "Hình ảnh căn nhà" };
 
-type Props = { params: Promise<{ id: string }> };
+type Props = {
+  params: Promise<{ id: string }>;
+  searchParams?: Promise<{ upload?: string }>;
+};
 
-export default async function PropertyImagesPage({ params }: Props) {
+export default async function PropertyImagesPage({ params, searchParams }: Props) {
   const { id } = await params;
+  const { upload } = (await searchParams) ?? {};
 
   // Organization-scoped reads via the shared services (Phase 3D alignment).
   const ctx = await tryGetRequestContext();
@@ -68,6 +72,14 @@ export default async function PropertyImagesPage({ params }: Props) {
           ← Chi tiết
         </Link>
       </div>
+
+      {/* Notice when the create-with-images flow could not upload every image */}
+      {upload === "partial" && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+          Căn đã được lưu, nhưng một số ảnh chưa tải lên thành công. Bạn có thể
+          tải lại ngay bên dưới.
+        </p>
+      )}
 
       {/* Upload form */}
       {canUpload && (

@@ -950,6 +950,65 @@ types. Aspect ratio is preserved, transparent areas get a white background
 before JPEG conversion, and EXIF orientation is applied so phone photos are not
 rotated. Supabase Storage legacy rows still work unchanged.
 
+### Optional images in the create-property form (one flow, two safe steps)
+
+`/dashboard/properties/new` lets the broker select images **inside** the "Thêm
+căn mới" form (section "Hình ảnh căn nhà", optional). To the user it is one
+flow — fill fields + pick images → "Tạo bất động sản" → property is created →
+images upload → redirect. Technically it stays the **same safe two-step flow**
+as the gallery upload; no image bytes ever pass through the property-create
+Server Action:
+
+```text
+1. createPropertyWithImages(formData) → { ok, propertyId }   (fields only)
+   - a no-redirect sibling of createProperty(); returns the new id so the
+     client can keep orchestrating instead of redirecting immediately.
+2. if images selected → uploadPropertyImagesToR2(propertyId, files):
+     per image: createMainAndThumbnailImages → request presigned R2 targets →
+     PUT main + thumbnail directly to R2 → finalize row   (bytes never hit the
+     Server Action — identical direct-to-R2 architecture as the images page)
+3. redirect:
+     no images / all uploaded → /dashboard/properties/[id]
+     some uploads failed      → /dashboard/properties/[id]/images?upload=partial
+```
+
+Key behaviours:
+
+```text
+- The property is NEVER rolled back if an image upload fails. The broker has
+  already entered the source; a friendly notice on the images page invites a
+  retry ("Căn đã được lưu, nhưng một số ảnh chưa tải lên thành công…").
+- Progress text is honest: "Đang lưu thông tin căn…", "Đang tối ưu ảnh i/n…",
+  "Đang tải ảnh i/n…", "Đang hoàn tất…". Submit is disabled while pending and
+  double-submit is prevented.
+- The select-time picker reuses classifyImageFile / isProbablyImageFile and the
+  20 MB raw cap; real-format handling (JPG/PNG/WebP/HEIC) is identical to the
+  gallery because the upload path is the SAME helper.
+```
+
+Shared client upload helper (`src/lib/images/upload-property-images.ts`):
+
+```text
+uploadProcessedPropertyImage(propertyId, file, {requestTargets, finalize}, onStatus)
+  → process + presign + PUT main + PUT thumbnail + finalize a SINGLE image;
+    returns { ok } | { ok:false, error } with friendly Vietnamese messages
+    (non-image / HEIC / process-failed / CORS / upload-failed).
+uploadPropertyImagesToR2(propertyId, files, actions, onProgress)
+  → run the single-image flow over many files, tolerant of partial failure;
+    returns { total, uploaded, failed, firstError }.
+```
+
+The R2 request/finalize Server Actions are **injected**, so the helper has no
+app-route coupling and is reused by BOTH the property images page
+(`image-upload-form.tsx`, single file) and the create form
+(`new/new-property-form.tsx`, many files). The separate
+`/dashboard/properties/[id]/images` page remains available and unchanged.
+`PropertyFields` (shared field cards) is extracted from `PropertyForm` so the
+create-with-images form (`NewPropertyForm`) and the edit form reuse the exact
+same fields without duplication. The picker
+(`src/components/property/property-image-picker.tsx`) is generic so a future
+Quick Add "create then upload selected images" flow can reuse it.
+
 ### Storage abstraction — use it for ALL media operations
 
 `src/lib/storage/property-media.ts` is the single, provider-aware entry point.

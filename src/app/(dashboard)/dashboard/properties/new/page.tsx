@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { createProperty } from "./actions";
-import { PropertyForm } from "../property-form";
+import { NewPropertyForm } from "./new-property-form";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -21,7 +20,7 @@ export default async function NewPropertyPage() {
         </Link>
       </div>
 
-      <PropertyForm action={createProperty} submitLabel="Tạo bất động sản" />
+      <NewPropertyForm />
     </div>
   );
 }

@@ -6,11 +6,11 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/ui/form-error";
 import {
-  createMainAndThumbnailImages,
   isProbablyImageFile,
   ERR_NOT_IMAGE,
   ERR_GALLERY_TOO_LARGE,
 } from "@/lib/images/client-image-processing";
+import { uploadProcessedPropertyImage } from "@/lib/images/upload-property-images";
 import {
   requestProcessedPropertyImageUpload,
   finalizePropertyImageUpload,
@@ -78,108 +78,32 @@ function UploadFormInner({
     setPreview(URL.createObjectURL(picked));
   }
 
-  // A friendly CORS/network error shared by both direct-to-R2 PUTs.
-  const CORS_ERROR =
-    "Không tải được ảnh lên R2. Nhiều khả năng bucket chưa cho phép CORS từ địa chỉ hiện tại. " +
-    "Hãy thêm origin này vào cấu hình CORS của bucket R2 rồi thử lại.";
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!file || isPending) return;
 
     setError(null);
     setIsPending(true);
+    setStatusMsg("Đang xử lý ảnh…");
 
     try {
-      // 1. Resize/compress on the client → social-ready main + small thumbnail.
-      setStatusMsg("Đang xử lý ảnh…");
-      let processed;
-      try {
-        processed = await createMainAndThumbnailImages(file);
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Không xử lý được ảnh. Vui lòng thử ảnh khác."
-        );
-        setStatusMsg(null);
-        setIsPending(false);
-        return;
-      }
-      const { main, thumbnail } = processed;
-
-      // 2. Ask the server for presigned R2 upload targets for both files.
-      const req = await requestProcessedPropertyImageUpload(propertyId, {
-        fileName: main.file.name,
-        width: main.width,
-        height: main.height,
-        original: { mimeType: main.mimeType, sizeBytes: main.sizeBytes },
-        thumbnail: {
-          mimeType: thumbnail.mimeType,
-          sizeBytes: thumbnail.sizeBytes,
+      // Process → presign → direct-to-R2 PUT (main + thumbnail) → finalize.
+      // The shared helper keeps this identical to the create-with-images flow;
+      // bytes never travel through a Server Action.
+      const res = await uploadProcessedPropertyImage(
+        propertyId,
+        file,
+        {
+          requestTargets: requestProcessedPropertyImageUpload,
+          finalize: finalizePropertyImageUpload,
         },
-      });
-      if (!req.ok) {
-        setError(req.error);
-        setStatusMsg(null);
-        setIsPending(false);
-        return;
-      }
-
-      // 3. Upload the main image straight to R2. A thrown error here is almost
-      //    always a CORS/network failure (the bucket must allow this origin).
-      setStatusMsg("Đang tải ảnh lên…");
-      let mainRes: Response;
-      try {
-        mainRes = await fetch(req.originalUploadUrl, {
-          method: "PUT",
-          body: main.file,
-          headers: { "Content-Type": req.originalContentType },
-        });
-      } catch {
-        setError(CORS_ERROR);
-        setStatusMsg(null);
-        setIsPending(false);
-        return;
-      }
-      if (!mainRes.ok) {
-        setError(
-          `Tải ảnh lên R2 thất bại (mã ${mainRes.status}). Vui lòng thử lại.`
-        );
-        setStatusMsg(null);
-        setIsPending(false);
-        return;
-      }
-
-      // 4. Upload the thumbnail. If this fails after the main upload, we leave
-      //    the row pending (not finalized) so it stays hidden from the UI —
-      //    no broken image is ever shown.
-      let thumbRes: Response;
-      try {
-        thumbRes = await fetch(req.thumbnailUploadUrl, {
-          method: "PUT",
-          body: thumbnail.file,
-          headers: { "Content-Type": req.thumbnailContentType },
-        });
-      } catch {
-        setError(CORS_ERROR);
-        setStatusMsg(null);
-        setIsPending(false);
-        return;
-      }
-      if (!thumbRes.ok) {
-        setError(
-          `Tải ảnh thu nhỏ lên R2 thất bại (mã ${thumbRes.status}). Vui lòng thử lại.`
-        );
-        setStatusMsg(null);
-        setIsPending(false);
-        return;
-      }
-
-      // 5. Mark the row ready.
-      const fin = await finalizePropertyImageUpload(propertyId, req.imageId);
-      if (!fin.ok) {
-        setError(fin.error);
+        (phase) =>
+          setStatusMsg(
+            phase === "processing" ? "Đang xử lý ảnh…" : "Đang tải ảnh lên…"
+          )
+      );
+      if (!res.ok) {
+        setError(res.error);
         setStatusMsg(null);
         setIsPending(false);
         return;
