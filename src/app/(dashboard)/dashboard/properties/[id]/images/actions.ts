@@ -326,6 +326,14 @@ export async function finalizePropertyImageUpload(
 }
 
 // ---------------------------------------------------------------------------
+// Shared result shape for the live image-management actions (cover / delete /
+// reorder). Returning a structured result lets the embedded edit-form manager
+// surface a friendly message; callers that only revalidate (ImageCard) can
+// safely ignore the return value.
+// ---------------------------------------------------------------------------
+export type ImageOpResult = { ok: true } | { ok: false; error: string };
+
+// ---------------------------------------------------------------------------
 // setPropertyCoverImage
 //
 // Atomically: clears is_cover on all images for the property,
@@ -334,14 +342,14 @@ export async function finalizePropertyImageUpload(
 export async function setPropertyCoverImage(
   propertyId: string,
   imageId: string
-): Promise<void> {
+): Promise<ImageOpResult> {
   try {
     const ctx = await getRequestContext();
     await propertyImages.setPropertyCoverImage(ctx, propertyId, imageId);
     revalidateImagePaths(propertyId);
-  } catch {
-    // Swallow — the UI polls on revalidation; a failure here just leaves
-    // the cover unchanged, which is safe.
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: toApiError(err).message };
   }
 }
 
@@ -354,13 +362,35 @@ export async function setPropertyCoverImage(
 export async function deletePropertyImage(
   propertyId: string,
   imageId: string
-): Promise<void> {
+): Promise<ImageOpResult> {
   try {
     const ctx = await getRequestContext();
     await propertyImages.deletePropertyImage(ctx, propertyId, imageId);
     revalidateImagePaths(propertyId);
-  } catch {
-    // Silent — UI will reflect the unchanged state after revalidation.
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: toApiError(err).message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// reorderPropertyImages
+//
+// Persists a new display order (sort_order = index) for the given image ids.
+// Every id is verified to belong to the property + organization in the service,
+// so a foreign/cross-org id can never be injected. No image bytes move.
+// ---------------------------------------------------------------------------
+export async function reorderPropertyImages(
+  propertyId: string,
+  orderedImageIds: string[]
+): Promise<ImageOpResult> {
+  try {
+    const ctx = await getRequestContext();
+    await propertyImages.reorderPropertyImages(ctx, propertyId, orderedImageIds);
+    revalidateImagePaths(propertyId);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: toApiError(err).message };
   }
 }
 

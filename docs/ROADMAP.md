@@ -628,6 +628,43 @@ Done:
   architecture; no schema/RLS/auth/nav changes; separate images page preserved.
 ```
 
+### 3a-bis. Consistent image section across ALL property/source forms — 🟢 DONE
+
+Goal:
+
+```text
+Every property/source form (manual create, Quick Add review, edit) should share
+the same "Hình ảnh căn nhà" section, so adding/editing a source always includes
+images in one consistent place.
+```
+
+Done:
+
+```text
+- One shared component src/components/property/property-image-section.tsx with
+  two modes:
+    • draft    — manual create + Quick Add review (text AND image OCR). Collect
+      pending images, upload to R2 AFTER the property is created. NO image bytes
+      through create. Quick Add review form is now NewPropertyForm (draft mode).
+    • existing — edit form. PropertyImageManager: live add / delete / set-cover /
+      reorder (↑/↓), applied immediately and INDEPENDENTLY of the fields form;
+      an image failure never blocks text editing.
+- Reorder added on the existing sort_order column (no schema change):
+    service reorderPropertyImages(ctx, propertyId, orderedImageIds) — verifies
+      property in org + every id belongs to the property (cross-org → NOT_FOUND),
+      writes sort_order = index, preserves cover flag.
+    action reorderPropertyImages(propertyId, orderedImageIds) → { ok }|{ ok:false }.
+    API POST /api/properties/[id]/images/reorder { orderedImageIds }.
+- Cover/delete actions now RETURN { ok }|{ ok:false, error } (was void) so the
+  edit-form manager shows friendly messages; ImageCard ignores the return, so
+  the standalone /properties/[id]/images page is unchanged.
+- Reuses classifyImageFile / isProbablyImageFile / createMainAndThumbnailImages /
+  uploadPropertyImagesToR2 — no duplicated processing, no file.type-only checks.
+- OCR source image intentionally NOT carried forward as a listing photo (often a
+  screenshot of someone else's post). Direct-to-R2 + Supabase-legacy unchanged;
+  no auth/billing/Team-UI/nav/AI changes; separate images page preserved.
+```
+
 ### 3b. UX Responsiveness Pass — 🟢 DONE
 
 Goal:

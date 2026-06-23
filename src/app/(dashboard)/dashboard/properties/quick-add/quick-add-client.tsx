@@ -12,8 +12,7 @@ import {
   processImageForOcr,
   ERR_NOT_IMAGE,
 } from "@/lib/images/client-image-processing";
-import { createProperty } from "../new/actions";
-import { PropertyForm } from "../property-form";
+import { NewPropertyForm } from "../new/new-property-form";
 import type { PropertyFormDefaults } from "../property-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -471,11 +470,12 @@ function ReviewStep({
         <RawTextPreview rawText={rawText} />
       )}
 
-      <PropertyForm
-        action={createProperty}
-        defaultValues={draft}
-        submitLabel="Lưu bất động sản"
-      />
+      {/* Same draft create-with-images flow as the manual "Add new property"
+          form: create the property first, then upload any selected images
+          directly to R2. The OCR source image is intentionally NOT carried
+          forward as a listing photo (it is often a screenshot of someone
+          else's post) — the broker picks their own listing images here. */}
+      <NewPropertyForm defaultValues={draft} submitLabel="Lưu bất động sản" />
     </div>
   );
 }

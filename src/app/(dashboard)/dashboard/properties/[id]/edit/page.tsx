@@ -5,8 +5,11 @@ import { notFound } from "next/navigation";
 import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { toApiError } from "@/lib/api/errors";
 import { getPropertyById } from "@/lib/services/properties";
+import { listPropertyImages } from "@/lib/services/property-images";
 import { updateProperty } from "./actions";
 import { PropertyForm } from "../../property-form";
+import { PropertyImageSection } from "@/components/property/property-image-section";
+import type { ManagerImage } from "@/components/property/property-image-manager";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +39,23 @@ export default async function EditPropertyPage({ params }: Props) {
   // Bind the property id into the action on the server so the client never
   // controls which row gets updated.
   const boundAction = updateProperty.bind(null, id);
+
+  // Existing images for the live manager (thumbnails; pending rows excluded by
+  // the service). A read failure must not break field editing — fall back to []
+  // so the manager still lets the user add images.
+  let managerImages: ManagerImage[] = [];
+  try {
+    const items = await listPropertyImages(ctx, id, { variant: "thumbnail" });
+    managerImages = items.map((img) => ({
+      id: img.id,
+      url: img.url ?? "",
+      fileName: img.file_name,
+      isCover: img.is_cover,
+      sizeBytes: img.size_bytes,
+    }));
+  } catch {
+    managerImages = [];
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -73,6 +93,14 @@ export default async function EditPropertyPage({ params }: Props) {
           owner_note: property.owner_note ?? "",
           planning_note: property.planning_note ?? "",
         }}
+      />
+
+      {/* Live image management — persists immediately and independently of the
+          property fields form above. An image failure never blocks editing. */}
+      <PropertyImageSection
+        mode="existing"
+        propertyId={id}
+        images={managerImages}
       />
     </div>
   );

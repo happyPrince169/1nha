@@ -4,9 +4,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormError } from "@/components/ui/form-error";
-import { PropertyImagePicker } from "@/components/property/property-image-picker";
+import { PropertyImageSection } from "@/components/property/property-image-section";
 import { uploadPropertyImagesToR2 } from "@/lib/images/upload-property-images";
 import { PropertyFields, type PropertyFormDefaults } from "../property-form";
 import { createPropertyWithImages } from "./actions";
@@ -17,6 +16,7 @@ import {
 
 type Props = {
   defaultValues?: PropertyFormDefaults;
+  submitLabel?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -30,7 +30,10 @@ type Props = {
 // The property is NEVER rolled back when an image upload fails — the broker has
 // already entered the source; they can re-upload from the images page.
 // ---------------------------------------------------------------------------
-export function NewPropertyForm({ defaultValues }: Props) {
+export function NewPropertyForm({
+  defaultValues,
+  submitLabel = "Tạo bất động sản",
+}: Props) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -107,20 +110,14 @@ export function NewPropertyForm({ defaultValues }: Props) {
 
       <PropertyFields defaultValues={defaultValues} disabled={isPending} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Hình ảnh căn nhà</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <p className="text-sm text-muted-foreground">
-            Bạn có thể thêm ảnh ngay bây giờ hoặc bổ sung sau.
-          </p>
-          <PropertyImagePicker onChange={setFiles} disabled={isPending} />
-        </CardContent>
-      </Card>
+      <PropertyImageSection
+        mode="draft"
+        onFilesChange={setFiles}
+        disabled={isPending}
+      />
 
       <Button type="submit" className="h-11 w-full" disabled={isPending}>
-        {isPending ? (statusMsg ?? "Đang lưu…") : "Tạo bất động sản"}
+        {isPending ? (statusMsg ?? "Đang lưu…") : submitLabel}
       </Button>
 
       {isPending && statusMsg && (

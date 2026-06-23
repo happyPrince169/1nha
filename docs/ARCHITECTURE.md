@@ -530,6 +530,7 @@ setPropertyCoverImage(ctx, propertyId, imageId)            clear covers, set thi
 GET    /api/properties/[id]/images                       list (?variant=thumbnail|original, default thumbnail)
 POST   /api/properties/[id]/images/upload-targets        presign processed main+thumbnail PUTs (step 1)
 POST   /api/properties/[id]/images/finalize              mark upload ready (step 2)  { imageId }
+POST   /api/properties/[id]/images/reorder               set order  { orderedImageIds } (sort_order=index)
 PATCH  /api/properties/[id]/images/[imageId]             update caption / alt_text
 DELETE /api/properties/[id]/images/[imageId]             delete image
 POST   /api/properties/[id]/images/[imageId]/cover       set as cover
@@ -1005,9 +1006,62 @@ app-route coupling and is reused by BOTH the property images page
 `/dashboard/properties/[id]/images` page remains available and unchanged.
 `PropertyFields` (shared field cards) is extracted from `PropertyForm` so the
 create-with-images form (`NewPropertyForm`) and the edit form reuse the exact
-same fields without duplication. The picker
-(`src/components/property/property-image-picker.tsx`) is generic so a future
-Quick Add "create then upload selected images" flow can reuse it.
+same fields without duplication.
+
+### One shared "Hình ảnh căn nhà" section across ALL property/source forms
+
+Every property/source form renders the **same** image section component
+(`src/components/property/property-image-section.tsx`) so the experience is
+consistent. It has two modes:
+
+```text
+mode="draft"     — no propertyId yet. Used by the manual create form
+                   (NewPropertyForm) and the Quick Add review form (text + image
+                   OCR both end on the same NewPropertyForm). Collect pending
+                   images via PropertyImagePicker; the parent uploads them to R2
+                   AFTER the property is created (create → upload → redirect).
+                   No image bytes pass through the create Server Action.
+mode="existing"  — propertyId exists. Used by the edit form. Renders
+                   PropertyImageManager: live add / delete / set-cover / reorder,
+                   each applied IMMEDIATELY and INDEPENDENTLY of the property
+                   fields form. An image failure never blocks field editing.
+```
+
+Quick Add: the review form is now `NewPropertyForm` (draft mode), so both text
+and image OCR flows create the property first, then upload any selected listing
+images. The OCR source image is intentionally **not** carried forward as a
+listing photo (it is frequently a screenshot of someone else's post); the broker
+selects their own images in the review form.
+
+Edit form image management (`PropertyImageManager`, existing mode):
+
+```text
+- Add:      PropertyImagePicker + "Tải N ảnh lên" → uploadPropertyImagesToR2
+            (same direct-to-R2 helper), then router.refresh() for new thumbnails.
+- Set cover: setPropertyCoverImage action (existing).
+- Delete:    deletePropertyImage action (existing).
+- Reorder:   ↑ / ↓ buttons → reorderPropertyImages (NEW). Writes sort_order =
+             index; cover flag is preserved (list/gallery stay cover-first).
+- The cover/delete actions now RETURN { ok } | { ok:false, error } (was void) so
+  the manager can show friendly messages; ImageCard ignores the return value, so
+  the standalone images page is unchanged.
+```
+
+Reorder service/API (uses the existing `sort_order` column — no schema change):
+
+```text
+service: reorderPropertyImages(ctx, propertyId, orderedImageIds)
+  - verifies the property is in ctx.organizationId, then verifies EVERY id is a
+    finalized image of that property (cross-org/foreign id → NOT_FOUND).
+  - writes sort_order = index per id (cover flag untouched).
+action:  reorderPropertyImages(propertyId, orderedImageIds) → { ok } | { ok:false }
+API:     POST /api/properties/[id]/images/reorder  { orderedImageIds: string[] }
+         (cookie + Bearer auth, same { ok, data } / { ok, error } envelope)
+```
+
+The generic picker (`src/components/property/property-image-picker.tsx`) is
+reused by draft mode and the edit-form "add" sub-flow, so a future Quick Add
+camera-first capture reuses the same "create then upload selected images" path.
 
 ### Storage abstraction — use it for ALL media operations
 

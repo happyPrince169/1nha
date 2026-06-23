@@ -693,3 +693,59 @@ export async function setPropertyCoverImage(
 
   return { id: imageId };
 }
+
+// ---------------------------------------------------------------------------
+// reorderPropertyImages — persist a new display order via sort_order.
+//
+// Writes sort_order = index for each provided image id (in order). The cover
+// flag is preserved (untouched), so list/gallery reads keep their cover-first
+// ordering. Every provided id MUST belong to this property (and, transitively,
+// the caller's organization) — a guessed cross-org/foreign image id resolves to
+// NOT_FOUND, never a silent cross-property write. No bytes move.
+// ---------------------------------------------------------------------------
+export async function reorderPropertyImages(
+  ctx: RequestContext,
+  propertyId: string,
+  orderedImageIds: string[]
+): Promise<{ ok: true }> {
+  await requirePropertyInOrg(ctx, propertyId);
+
+  if (!Array.isArray(orderedImageIds) || orderedImageIds.length === 0) {
+    throw validationError("Danh sách ảnh không hợp lệ.");
+  }
+  for (const id of orderedImageIds) assertUuid(id, "Mã hình ảnh");
+  if (new Set(orderedImageIds).size !== orderedImageIds.length) {
+    throw validationError("Danh sách ảnh không hợp lệ.");
+  }
+
+  // Every provided id must be a finalized image of THIS property.
+  const { data, error } = await ctx.supabase
+    .from("property_images")
+    .select("id")
+    .eq("property_id", propertyId)
+    .neq("storage_path", LEGACY_PENDING_PATH)
+    .neq("storage_path", R2_PENDING_PATH);
+
+  if (error) throw internalError(error.message);
+  const existing = new Set((data ?? []).map((r) => (r as { id: string }).id));
+  for (const id of orderedImageIds) {
+    if (!existing.has(id)) throw notFound("Không tìm thấy hình ảnh.");
+  }
+
+  // Assign sort_order by position. Scoped by property_id (RLS is the backstop).
+  for (let i = 0; i < orderedImageIds.length; i++) {
+    const { error: upErr } = await ctx.supabase
+      .from("property_images")
+      .update({ sort_order: i })
+      .eq("id", orderedImageIds[i])
+      .eq("property_id", propertyId);
+    if (upErr) throw internalError(upErr.message);
+  }
+
+  await trackEvent(ctx.supabase, ctx.userId, "property_images_reordered", {
+    property_id: propertyId,
+    count: orderedImageIds.length,
+  });
+
+  return { ok: true };
+}

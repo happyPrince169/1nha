@@ -23,6 +23,7 @@ export type UsageEventType =
   | "property_image_uploaded"
   | "property_image_deleted"
   | "property_cover_updated"
+  | "property_images_reordered"
   | "content_edited"
   | "post_assistant_opened"
   | "post_assistant_text_copied"
