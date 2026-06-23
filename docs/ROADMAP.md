@@ -340,9 +340,10 @@ unchanged. No UI/schema/RLS/auth/billing/nav changes; no auto-posting.
   parsePriceToVnd / formatPriceForInput). Reused by the form, the quick-add
   extractor (re-exports from here — no divergent copy), the Properties service
   (validatePropertyInput + list-filter parsing), and the /api/properties routes.
-- Manual price input is a free-form text field (type=text inputMode=text — NOT
-  decimal, so the mobile keyboard allows "tỷ"/"triệu"/"tr"; no step/min/max;
-  helper "8 tỷ 650, 8.65 tỷ, 850 triệu…"). parsePriceToVnd normalises
+- Manual price input is a free-form text field (type=text with NO inputMode at
+  all — decimal/numeric, and even text on some browsers, force a numeric keypad
+  that can't type "tỷ"/"triệu"/"tr"; no pattern/step/min/max; helper "8 tỷ 650,
+  8.65 tỷ, 850 triệu…"). parsePriceToVnd normalises
   "8 tỷ 650" / "850 triệu" / "8,65 tỷ" / raw VND → the unchanged raw-VND store.
   Edit prefill shows a human-friendly price only when it round-trips exactly
   (else raw VND — no data loss).

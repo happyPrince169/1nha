@@ -517,12 +517,15 @@ formatPriceForInput(vnd) raw VND → human-friendly editable string, ONLY when i
                          round-trips exactly (else raw VND — never lossy)
 ```
 
-- **Manual price input** is a free-form text field — `type="text"
-  inputMode="text"` (NOT `decimal`, which forces a numeric mobile keypad that
-  cannot type "tỷ"/"triệu"/"tr"), with no step/min/max, and helper copy ("Có
-  thể nhập: 8 tỷ 650, 8.65 tỷ, 850 triệu…"). Brokers no longer type raw VND.
-  `validatePropertyInput` runs `parsePriceToVnd`, so create/edit/quick-add/API
-  all normalise to the **unchanged raw-VND** stored convention (never text).
+- **Manual price input** is a free-form text field — `type="text"` with **no
+  `inputMode`** at all (and no pattern/step/min/max). `inputMode="decimal"` /
+  `"numeric"`, and even `"text"` on some mobile browsers, coerce a numeric
+  keypad that cannot type "tỷ"/"triệu"/"tr"; omitting `inputMode` lets the
+  device show the full text keyboard. Helper copy: "Có thể nhập: 8 tỷ 650, 8.65
+  tỷ, 850 triệu…". Brokers no longer type raw VND. `validatePropertyInput` runs
+  `parsePriceToVnd`, so create/edit/quick-add/API all normalise to the
+  **unchanged raw-VND** stored convention (never text). The decimal dimension
+  fields (area/frontage/alley_width) DO keep `inputMode="decimal"`.
 - **Edit prefill** shows the stored price human-friendly ("8.65 tỷ") only when
   it round-trips to the exact same VND; odd amounts stay raw VND — zero data loss.
 - **List filters** accept decimals + units and fail gracefully (invalid → filter

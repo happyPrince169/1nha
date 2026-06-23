@@ -192,17 +192,18 @@ export function PropertyFields({
         <CardContent className="flex flex-col gap-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Giá" htmlFor="price">
-              {/* Natural Vietnamese price entry — type=text + inputMode=text so
-                  the MOBILE keyboard allows letters ("tỷ", "triệu", "tr"), not
-                  just digits. inputMode="decimal" would force a numeric pad and
-                  block these words. The server (parsePriceToVnd) normalises any
-                  expression — "8 tỷ 650" / "850 triệu" / "8,65 tỷ" / raw VND —
-                  to raw VND. No step/min/max so free-form text is never blocked. */}
+              {/* Do not set inputMode on price. It must allow Vietnamese text
+                  like "8 tỷ 650" on mobile. inputMode="decimal"/"numeric" — and
+                  even "text" on some browsers — coerce the on-screen keyboard to
+                  a numeric pad that cannot type "tỷ"/"triệu"/"tr". Omitting
+                  inputMode entirely lets the device show the full text keyboard.
+                  Keep type="text" with NO pattern/step/min/max. The server
+                  (parsePriceToVnd) normalises "8 tỷ 650" / "850 triệu" / raw VND
+                  to raw VND on save. */}
               <Input
                 id="price"
                 name="price"
                 type="text"
-                inputMode="text"
                 placeholder="VD: 8 tỷ 650 hoặc 850 triệu"
                 required
                 defaultValue={priceInputDefault(defaultValues.price)}
