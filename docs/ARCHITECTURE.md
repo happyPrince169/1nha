@@ -473,6 +473,67 @@ src/lib/services/properties.ts  (server-only)
   `hasNextPage` (no expensive COUNT). List select stays lightweight.
 - Cross-org reads/writes return `NOT_FOUND`, never another workspace's data.
 
+#### Numeric precision (decimal property fields)
+
+Real estate values need decimals, so the service preserves them instead of
+rounding to integers:
+
+```text
+- Decimal-safe parsing (validatePropertyInput → num()): accepts JS numbers and
+  strings with a dot OR a Vietnamese comma decimal, tolerant of thousands
+  separators — "32,8" → 32.8, "45,75" → 45.75, "1.234,5" → 1234.5. NaN /
+  Infinity / non-finite → null (VALIDATION_ERROR for required price/area; never
+  trusts client formatting). Shared by the web actions AND the /api routes.
+- Per-field precision cap (no entry-time over-rounding, no float noise):
+    price       → raw VND, capped at 3 decimals (integers in practice)
+    area        → up to 2 decimals (32.8, 45.75)
+    frontage    → up to 2 decimals (3.65)
+    alley_width → up to 2 decimals (2.35)
+    bedrooms / bathrooms → integer counts (rounded; no half-rooms)
+- Form inputs for area/frontage/alley_width are type="text" inputMode="decimal"
+  so Vietnamese mobile keyboards can enter a comma or dot decimal (step="0.1"
+  previously blocked 2-decimal values like 45.75). price stays a raw-VND number
+  input. DB columns already store decimals — NO schema/RLS change.
+- Display never mutates the stored value: formatVND preserves decimals
+  (8_650_000_000 → "8.65 tỷ", 850_500_000 → "850.5 triệu") instead of the old
+  toFixed(1)/toFixed(0) rounding; area renders its stored value directly.
+- Quick Add parsers keep comma/dot decimals: parseLocaleFloat normalises both,
+  parseVietnamesePrice is unchanged ("8 tỷ 650" → 8_650_000_000), and the AI
+  sanitiser's string fallback no longer strips a comma decimal to an integer.
+
+#### Phase 3E — natural price input + filter parsing (one shared parser)
+
+`src/lib/format/price.ts` is the single, PURE (isomorphic) home for all price +
+number parsing, reused by the form, the quick-add extractor, the Properties
+service, and the `/api/properties` routes (so web, API, and the future mobile
+client never diverge):
+
+```text
+parseLooseNumber(s)      dot OR comma decimal, thousands-tolerant → number|null
+parseVietnamesePrice(s)  "8 tỷ 650" / "850tr" / "3,5 tỷ" → integer VND | undefined
+hasVietnamesePriceUnit(s) detects a tỷ/triệu/tr unit in the text
+parsePriceToVnd(in)      VN expression OR raw VND → integer VND | null (no NaN)
+formatPriceForInput(vnd) raw VND → human-friendly editable string, ONLY when it
+                         round-trips exactly (else raw VND — never lossy)
+```
+
+- **Manual price input** is now `type="text" inputMode="decimal"` with helper
+  copy ("Có thể nhập: 8 tỷ 650, 8.65 tỷ, 850 triệu…"). Brokers no longer type
+  raw VND. `validatePropertyInput` runs `parsePriceToVnd`, so create/edit/
+  quick-add/API all normalise to the **unchanged raw-VND** stored convention.
+- **Edit prefill** shows the stored price human-friendly ("8.65 tỷ") only when
+  it round-trips to the exact same VND; odd amounts stay raw VND — zero data loss.
+- **List filters** accept decimals + units and fail gracefully (invalid → filter
+  ignored, never a NaN query). Price filters stay in **tỷ** (existing "Giá (tỷ)"
+  UI + `price_min * 1e9` query): a unit expression ("850 triệu") is converted to
+  tỷ, a bare number is treated as tỷ. Area filters accept comma/dot decimals.
+  The filter inputs became `type="text" inputMode="decimal"`.
+- No DB/RLS/schema change (price stays raw VND); the duplicate parser that lived
+  in `extract-property.ts` now re-exports from this module (no divergence).
+- Display is unchanged from Phase 3D: `formatVND` preserves decimals
+  ("8.65 tỷ", "850.5 triệu") and never mutates the stored value; the content
+  prompt mapping already uses `formatVND`, so generated content is unaffected.
+
 ### Properties API routes (web + future Expo)
 
 ```text

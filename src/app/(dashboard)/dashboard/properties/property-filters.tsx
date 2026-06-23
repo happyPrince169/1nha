@@ -319,11 +319,10 @@ export function PropertyFilters({ activeFilters, basePath }: Props) {
             </span>
             <div className="grid grid-cols-2 gap-2">
               <input
-                type="number"
-                min={0}
-                step={0.1}
+                type="text"
+                inputMode="decimal"
                 defaultValue={currentPriceMin}
-                placeholder="Từ"
+                placeholder="Từ (vd 8 tỷ)"
                 onBlur={(e) => navigate({ price_min: e.target.value })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter")
@@ -335,11 +334,10 @@ export function PropertyFilters({ activeFilters, basePath }: Props) {
                 className={FILTER_INPUT_CLASS}
               />
               <input
-                type="number"
-                min={0}
-                step={0.1}
+                type="text"
+                inputMode="decimal"
                 defaultValue={currentPriceMax}
-                placeholder="Đến"
+                placeholder="Đến (vd 8,5 tỷ)"
                 onBlur={(e) => navigate({ price_max: e.target.value })}
                 onKeyDown={(e) => {
                   if (e.key === "Enter")
@@ -360,9 +358,8 @@ export function PropertyFilters({ activeFilters, basePath }: Props) {
             </span>
             <div className="grid grid-cols-2 gap-2">
               <input
-                type="number"
-                min={0}
-                step={1}
+                type="text"
+                inputMode="decimal"
                 defaultValue={currentAreaMin}
                 placeholder="Từ"
                 onBlur={(e) => navigate({ area_min: e.target.value })}
@@ -376,9 +373,8 @@ export function PropertyFilters({ activeFilters, basePath }: Props) {
                 className={FILTER_INPUT_CLASS}
               />
               <input
-                type="number"
-                min={0}
-                step={1}
+                type="text"
+                inputMode="decimal"
                 defaultValue={currentAreaMax}
                 placeholder="Đến"
                 onBlur={(e) => navigate({ area_max: e.target.value })}

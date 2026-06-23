@@ -11,6 +11,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { formatPriceForInput } from "@/lib/format/price";
+
+/**
+ * Display a stored/draft price in the price input. A numeric value (raw VND from
+ * a saved property or a quick-add draft) is shown human-friendly ("8.65 tỷ")
+ * ONLY when it round-trips exactly; the input itself accepts any Vietnamese
+ * price expression on submit (the server normalises it back to raw VND).
+ */
+function priceInputDefault(v: number | string | undefined): string {
+  if (v === null || v === undefined || v === "") return "";
+  const n = typeof v === "number" ? v : Number(v);
+  if (Number.isFinite(n) && n > 0) return formatPriceForInput(n);
+  return String(v);
+}
 
 type FormAction = (
   prevState: CreatePropertyState,
@@ -177,29 +191,35 @@ export function PropertyFields({
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Giá (VND)" htmlFor="price">
+            <Field label="Giá" htmlFor="price">
+              {/* Natural Vietnamese price entry — type=text + inputMode=decimal
+                  so brokers can type "8 tỷ 650" / "850 triệu" / "8,65 tỷ" or raw
+                  VND. The server normalises every form to raw VND. */}
               <Input
                 id="price"
                 name="price"
-                type="number"
-                inputMode="numeric"
-                min={0}
-                placeholder="VD: 3500000000"
+                type="text"
+                inputMode="decimal"
+                placeholder="VD: 8 tỷ 650 hoặc 850 triệu"
                 required
-                defaultValue={defaultValues.price != null ? String(defaultValues.price) : ""}
+                defaultValue={priceInputDefault(defaultValues.price)}
                 disabled={isPending}
               />
+              <p className="text-xs text-muted-foreground">
+                Có thể nhập: 8 tỷ 650, 8.65 tỷ, 850 triệu…
+              </p>
             </Field>
 
             <Field label="Diện tích (m²)" htmlFor="area">
+              {/* type=text + inputMode=decimal so Vietnamese mobile keyboards
+                  can enter a comma OR dot decimal (e.g. 32,8 / 45.75); the
+                  server normalises the separator and caps at 2 decimals. */}
               <Input
                 id="area"
                 name="area"
-                type="number"
+                type="text"
                 inputMode="decimal"
-                min={0}
-                step="0.1"
-                placeholder="VD: 72"
+                placeholder="VD: 32,8"
                 required
                 defaultValue={defaultValues.area != null ? String(defaultValues.area) : ""}
                 disabled={isPending}
@@ -276,28 +296,26 @@ export function PropertyFields({
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Mặt tiền (m)" htmlFor="frontage">
+              {/* Decimal-capable (e.g. 3,65). Server caps at 2 decimals. */}
               <Input
                 id="frontage"
                 name="frontage"
-                type="number"
+                type="text"
                 inputMode="decimal"
-                min={0}
-                step="0.1"
-                placeholder="VD: 5"
+                placeholder="VD: 3,65"
                 defaultValue={defaultValues.frontage != null ? String(defaultValues.frontage) : ""}
                 disabled={isPending}
               />
             </Field>
 
             <Field label="Đường vào (m)" htmlFor="alley_width">
+              {/* Decimal-capable (e.g. 2,35). Server caps at 2 decimals. */}
               <Input
                 id="alley_width"
                 name="alley_width"
-                type="number"
+                type="text"
                 inputMode="decimal"
-                min={0}
-                step="0.1"
-                placeholder="VD: 3"
+                placeholder="VD: 2,35"
                 defaultValue={defaultValues.alley_width != null ? String(defaultValues.alley_width) : ""}
                 disabled={isPending}
               />

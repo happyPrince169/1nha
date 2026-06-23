@@ -330,9 +330,35 @@ typecheck + build pass. No auto-posting / social-token handling anywhere.
 ```
 
 Verified: lint + typecheck + build pass; unauthenticated 401 behaviour
-unchanged. No UI/schema/RLS/auth/billing/nav changes; no auto-posting. Next:
-**Phase 4 — Team UI MVP**. Vietnam SMS OTP provider stays paused; social OAuth
-still not needed.
+unchanged. No UI/schema/RLS/auth/billing/nav changes; no auto-posting.
+
+**Phase 3E — 🟢 IMPLEMENTED** (Form polish & data integrity — pre-Team-UI):
+
+```text
+- One shared, pure price/number parser: src/lib/format/price.ts
+  (parseLooseNumber / parseVietnamesePrice / hasVietnamesePriceUnit /
+  parsePriceToVnd / formatPriceForInput). Reused by the form, the quick-add
+  extractor (re-exports from here — no divergent copy), the Properties service
+  (validatePropertyInput + list-filter parsing), and the /api/properties routes.
+- Manual price input is natural Vietnamese entry (type=text inputMode=decimal,
+  helper "8 tỷ 650, 8.65 tỷ, 850 triệu…"). parsePriceToVnd normalises
+  "8 tỷ 650" / "850 triệu" / "8,65 tỷ" / raw VND → the unchanged raw-VND store.
+  Edit prefill shows a human-friendly price only when it round-trips exactly
+  (else raw VND — no data loss).
+- List filters accept comma/dot decimals + Vietnamese price units and fail
+  gracefully (invalid → ignored, never a NaN query). Price filters stay in tỷ
+  ("850 triệu" → 0.85 tỷ; bare number = tỷ); area filters accept "32,8". Filter
+  inputs are now type=text inputMode=decimal.
+- area / frontage / alley_width still preserve up to 2 decimals; bedrooms /
+  bathrooms stay integers. Display (formatVND) unchanged from 3D — preserves
+  "8.65 tỷ" / "850.5 triệu", never mutates the stored value.
+- No DB/RLS/schema/auth/billing/Team-UI/nav/AI-strategy changes. Stored price
+  convention remains raw VND.
+```
+
+Verified: lint + typecheck + build pass; price parser round-trips checked
+against the spec examples. Next: **Phase 4 — Team UI MVP**. Vietnam SMS OTP
+provider stays paused; social OAuth still not needed.
 
 ### Phase 4 — Team UI MVP
 

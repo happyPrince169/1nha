@@ -5,6 +5,10 @@
 // ---------------------------------------------------------------------------
 
 import type { PropertyFormDefaults } from "@/app/(dashboard)/dashboard/properties/property-form";
+import { parseVietnamesePrice, parseLocaleFloat } from "@/lib/format/price";
+
+// Re-export so existing importers of these helpers from this module keep working.
+export { parseVietnamesePrice, parseLocaleFloat };
 
 // ---------------------------------------------------------------------------
 // System prompt — tells the model exactly what JSON shape to return.
@@ -130,8 +134,14 @@ function sanitise(raw: Record<string, unknown>): ExtractPropertyResult {
     if (typeof v === "string" && v.trim()) {
       const vn = parseVietnamesePrice(v.trim());
       if (vn !== undefined) return vn;
-      const plain = Number(v.replace(/[^0-9.]/g, ""));
-      if (Number.isFinite(plain) && plain > 0) return plain;
+      // Keep digits + both decimal separators, then locale-normalise so a
+      // comma-decimal string (e.g. "32,8") is parsed as 32.8 — NOT stripped to
+      // 328. parseLocaleFloat handles dot OR comma + thousands separators.
+      const cleaned = v.replace(/[^0-9.,]/g, "").trim();
+      if (cleaned) {
+        const plain = parseLocaleFloat(cleaned);
+        if (Number.isFinite(plain) && plain > 0) return plain;
+      }
     }
     return undefined;
   };
@@ -162,51 +172,6 @@ function sanitise(raw: Record<string, unknown>): ExtractPropertyResult {
     owner_note: str("owner_note"),
     planning_note: str("planning_note"),
   };
-}
-
-// ---------------------------------------------------------------------------
-// parseVietnamesePrice
-// Converts Vietnamese price shorthand to an integer VND amount.
-//
-// Inline edge-case tests:
-//   parseVietnamesePrice("8 ty 650")  === 8_650_000_000  // ty + trailing trieu
-//   parseVietnamesePrice("5 ty 2")    === 5_200_000_000  // single digit x100 trieu
-//   parseVietnamesePrice("3,5 ty")    === 3_500_000_000  // comma decimal
-//   parseVietnamesePrice("850tr")     === 850_000_000    // trieu abbreviation
-//   parseVietnamesePrice("1.2 ty")    === 1_200_000_000  // dot decimal
-//   parseVietnamesePrice("4 tang")    === undefined       // floors, not a price
-// ---------------------------------------------------------------------------
-export function parseVietnamesePrice(text: string): number | undefined {
-  const t = text.trim();
-
-  // Pattern A: "X ty Y" where Y is trailing trieu amount
-  // Single-digit Y ("5 ty 2") treated as x100 trieu = 200 trieu.
-  const tyRemainder = t.match(
-    /^(\d+(?:[.,]\d+)?)\s*t[\u1ef7y]\s+(\d+(?:[.,]\d+)?)(?:\s*(?:tri[e\u1ec7\u1ec5]u|tr))?$/i
-  );
-  if (tyRemainder) {
-    const billions = parseLocaleFloat(tyRemainder[1]);
-    let rem = parseLocaleFloat(tyRemainder[2]);
-    if (rem < 10) rem = rem * 100;
-    return Math.round(billions * 1_000_000_000 + rem * 1_000_000);
-  }
-
-  // Pattern B: "X ty" plain ("3,5 ty" -> 3_500_000_000)
-  const tyOnly = t.match(/^(\d+(?:[.,]\d+)?)\s*t[\u1ef7y]$/i);
-  if (tyOnly) return Math.round(parseLocaleFloat(tyOnly[1]) * 1_000_000_000);
-
-  // Pattern C: "X trieu" / "Xtr" ("850tr" -> 850_000_000)
-  const trieu = t.match(/^(\d+(?:[.,]\d+)?)\s*(?:tri[e\u1ec7\u1ec5]u|tr)$/i);
-  if (trieu) return Math.round(parseLocaleFloat(trieu[1]) * 1_000_000);
-
-  return undefined;
-}
-
-/** Normalise locale decimal separators then parseFloat. */
-function parseLocaleFloat(s: string): number {
-  const hasBoth = s.includes(".") && s.includes(",");
-  if (hasBoth) return parseFloat(s.replace(".", "").replace(",", "."));
-  return parseFloat(s.replace(",", "."));
 }
 
 // ---------------------------------------------------------------------------

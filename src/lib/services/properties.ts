@@ -17,6 +17,12 @@ import "server-only";
 import type { RequestContext } from "@/lib/workspace/request-context";
 import { validationError, notFound, internalError } from "@/lib/api/errors";
 import type { LegalStatus, PropertyType, PropertyStatus } from "@/types";
+import {
+  parseLooseNumber,
+  parsePriceToVnd,
+  parseVietnamesePrice,
+  hasVietnamesePriceUnit,
+} from "@/lib/format/price";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -93,6 +99,31 @@ function parsePositiveNumber(raw: string | undefined): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** Decimal-capable positive filter value (comma/dot), e.g. area "32,8" → 32.8.
+ *  Invalid input → null (filter is ignored; never a NaN query). */
+function parsePositiveDecimal(raw: string | undefined): number | null {
+  if (!raw || !raw.trim()) return null;
+  const n = parseLooseNumber(raw.trim());
+  return n !== null && n > 0 ? n : null;
+}
+
+/**
+ * Price filter value, expressed in tỷ to match the existing "Giá (tỷ)" filter
+ * UI + query math (price_min * 1e9). Accepts a Vietnamese price expression
+ * (8 tỷ / 8.65 tỷ / 850 triệu → converted to tỷ) OR a bare number (already tỷ).
+ * Invalid input → null (filter ignored; never a NaN query).
+ */
+function parsePriceFilterTy(raw: string | undefined): number | null {
+  if (!raw || !raw.trim()) return null;
+  const t = raw.trim();
+  if (hasVietnamesePriceUnit(t)) {
+    const vnd = parseVietnamesePrice(t);
+    return vnd !== undefined && vnd > 0 ? vnd / 1_000_000_000 : null;
+  }
+  const n = parseLooseNumber(t);
+  return n !== null && n > 0 ? n : null;
+}
+
 function parseString(raw: string | undefined): string | null {
   const s = raw?.trim();
   return s && s.length > 0 ? s : null;
@@ -112,10 +143,10 @@ export function parsePropertyListParams(sp: RawListParams): PropertyListParams {
         : null,
       city: parseString(sp.city),
       district: parseString(sp.district),
-      price_min: parsePositiveNumber(sp.price_min),
-      price_max: parsePositiveNumber(sp.price_max),
-      area_min: parsePositiveNumber(sp.area_min),
-      area_max: parsePositiveNumber(sp.area_max),
+      price_min: parsePriceFilterTy(sp.price_min),
+      price_max: parsePriceFilterTy(sp.price_max),
+      area_min: parsePositiveDecimal(sp.area_min),
+      area_max: parsePositiveDecimal(sp.area_max),
       bedrooms: parsePositiveNumber(sp.bedrooms),
       legal_status: VALID_LEGAL_STATUSES.has(sp.legal_status ?? "")
         ? (sp.legal_status ?? null)
@@ -298,10 +329,40 @@ function str(v: unknown): string | null {
   return t.length ? t : null;
 }
 
+/**
+ * Decimal-safe numeric parser for property fields. Accepts JS numbers and
+ * strings with either a dot OR a Vietnamese comma decimal separator, and is
+ * tolerant of thousands separators:
+ *   "32.8" → 32.8 · "32,8" → 32.8 · "1.234,5" → 1234.5 · "1,234,567" → 1234567
+ * Rejects NaN / Infinity / non-finite → null (never trusts client formatting).
+ * Does NOT round — precision capping happens per-field in validatePropertyInput.
+ */
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
-  const n = typeof v === "number" ? v : Number(String(v).trim());
-  return Number.isFinite(n) ? n : null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v !== "string") return null;
+  // Shared decimal-safe parse (dot OR Vietnamese comma + thousands tolerant).
+  return parseLooseNumber(v);
+}
+
+/** Round to a fixed number of decimal places (no float noise). */
+function roundTo(n: number, places: number): number {
+  const f = 10 ** places;
+  return Math.round((n + Number.EPSILON) * f) / f;
+}
+
+/** Decimal-capable dimension: > 0 → rounded to `places`; else null. */
+function decimalField(v: unknown, places: number): number | null {
+  const n = num(v);
+  if (n === null || n <= 0) return null;
+  return roundTo(n, places);
+}
+
+/** Integer count (bedrooms/bathrooms): >= 0 → rounded to a whole number. */
+function integerCount(v: unknown): number | null {
+  const n = num(v);
+  if (n === null || n < 0) return null;
+  return Math.round(n);
 }
 
 /** Validate + normalise a write payload. Throws VALIDATION_ERROR (Vietnamese). */
@@ -313,8 +374,11 @@ export function validatePropertyInput(input: PropertyWriteInput): ValidatedPrope
     propertyTypeRaw && VALID_PROPERTY_TYPES.has(propertyTypeRaw)
       ? (propertyTypeRaw as PropertyType)
       : null;
-  const price = num(input.price);
-  const area = num(input.area);
+  // price accepts Vietnamese expressions (8 tỷ 650, 850 triệu, 8.65 tỷ) AND
+  // raw VND; the shared parser normalises every input to integer VND.
+  const price = parsePriceToVnd(input.price ?? null);
+  // area keeps up to 2 decimals (e.g. 32.8, 45.75).
+  const area = decimalField(input.area, 2);
 
   if (!title) throw validationError("Vui lòng nhập tiêu đề.");
   if (!property_type) throw validationError("Vui lòng chọn loại bất động sản.");
@@ -337,11 +401,11 @@ export function validatePropertyInput(input: PropertyWriteInput): ValidatedPrope
     street: str(input.street),
     price,
     area,
-    bedrooms: num(input.bedrooms),
-    bathrooms: num(input.bathrooms),
+    bedrooms: integerCount(input.bedrooms),
+    bathrooms: integerCount(input.bathrooms),
     house_direction: str(input.house_direction),
-    frontage: num(input.frontage),
-    alley_width: num(input.alley_width),
+    frontage: decimalField(input.frontage, 2),
+    alley_width: decimalField(input.alley_width, 2),
     legal_status,
     description: str(input.description),
     strengths: str(input.strengths),
