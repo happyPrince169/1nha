@@ -48,16 +48,39 @@ export function parseLooseNumber(input: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Round a finite number to `places` decimal places, without float noise. This
+ * is the ONE shared rounding rule for every decimal-capable property field
+ * (area/frontage/alley_width at 5 places) and for price units (tỷ/triệu) before
+ * conversion to integer VND. Non-finite input → NaN (callers guard).
+ *   roundToDecimalPlaces(32.8123456789, 5) === 32.81235
+ *   roundToDecimalPlaces(45.756784321, 5)  === 45.75678
+ *   roundToDecimalPlaces(2.35789999, 5)    === 2.3579
+ *   roundToDecimalPlaces(32.800000, 5)     === 32.8
+ */
+export function roundToDecimalPlaces(value: number, places: number): number {
+  if (!Number.isFinite(value)) return NaN;
+  const f = 10 ** places;
+  return Math.round((value + Number.EPSILON) * f) / f;
+}
+
+/** Decimal places kept for a price UNIT (tỷ/triệu) before VND conversion. */
+const PRICE_UNIT_DECIMALS = 5;
+
 // ---------------------------------------------------------------------------
 // parseVietnamesePrice — Vietnamese price shorthand → integer VND.
 //
+// The expressed UNIT (tỷ / triệu) is rounded to 5 decimals BEFORE conversion,
+// then the final VND is an integer (Math.round) — never fractional VND.
+//
 // Inline edge-case tests:
-//   parseVietnamesePrice("8 ty 650")  === 8_650_000_000  // ty + trailing trieu
-//   parseVietnamesePrice("5 ty 2")    === 5_200_000_000  // single digit x100 trieu
-//   parseVietnamesePrice("3,5 ty")    === 3_500_000_000  // comma decimal
-//   parseVietnamesePrice("850tr")     === 850_000_000    // trieu abbreviation
-//   parseVietnamesePrice("1.2 ty")    === 1_200_000_000  // dot decimal
-//   parseVietnamesePrice("4 tang")    === undefined       // floors, not a price
+//   parseVietnamesePrice("8 ty 650")           === 8_650_000_000
+//   parseVietnamesePrice("5 ty 2")             === 5_200_000_000  // single digit x100 trieu
+//   parseVietnamesePrice("3,5 ty")             === 3_500_000_000  // comma decimal
+//   parseVietnamesePrice("850tr")              === 850_000_000    // trieu abbreviation
+//   parseVietnamesePrice("8,123456789 ty")     === 8_123_460_000  // 8.12346 ty
+//   parseVietnamesePrice("850,123456789 trieu")=== 850_123_460    // 850.12346 trieu
+//   parseVietnamesePrice("4 tang")             === undefined      // floors, not a price
 // ---------------------------------------------------------------------------
 export function parseVietnamesePrice(text: string): number | undefined {
   const t = text.trim();
@@ -65,29 +88,47 @@ export function parseVietnamesePrice(text: string): number | undefined {
   // Pattern A: "X ty Y" where Y is trailing trieu amount.
   // Single-digit Y ("5 ty 2") treated as x100 trieu = 200 trieu.
   const tyRemainder = t.match(
-    /^(\d+(?:[.,]\d+)?)\s*t[ỷy]\s+(\d+(?:[.,]\d+)?)(?:\s*(?:tri[eệễ]u|tr))?$/i
+    /^(\d+(?:[.,]\d+)?)\s*t[ỷyỉi]\s+(\d+(?:[.,]\d+)?)(?:\s*(?:tri[eệễ]u|tr))?$/i
   );
   if (tyRemainder) {
-    const billions = parseLocaleFloat(tyRemainder[1]);
-    let rem = parseLocaleFloat(tyRemainder[2]);
+    const billions = roundToDecimalPlaces(
+      parseLocaleFloat(tyRemainder[1]),
+      PRICE_UNIT_DECIMALS
+    );
+    let rem = roundToDecimalPlaces(
+      parseLocaleFloat(tyRemainder[2]),
+      PRICE_UNIT_DECIMALS
+    );
     if (rem < 10) rem = rem * 100;
     return Math.round(billions * 1_000_000_000 + rem * 1_000_000);
   }
 
   // Pattern B: "X ty" plain ("3,5 ty" -> 3_500_000_000)
-  const tyOnly = t.match(/^(\d+(?:[.,]\d+)?)\s*t[ỷy]$/i);
-  if (tyOnly) return Math.round(parseLocaleFloat(tyOnly[1]) * 1_000_000_000);
+  const tyOnly = t.match(/^(\d+(?:[.,]\d+)?)\s*t[ỷyỉi]$/i);
+  if (tyOnly) {
+    const billions = roundToDecimalPlaces(
+      parseLocaleFloat(tyOnly[1]),
+      PRICE_UNIT_DECIMALS
+    );
+    return Math.round(billions * 1_000_000_000);
+  }
 
   // Pattern C: "X trieu" / "Xtr" ("850tr" -> 850_000_000)
   const trieu = t.match(/^(\d+(?:[.,]\d+)?)\s*(?:tri[eệễ]u|tr)$/i);
-  if (trieu) return Math.round(parseLocaleFloat(trieu[1]) * 1_000_000);
+  if (trieu) {
+    const millions = roundToDecimalPlaces(
+      parseLocaleFloat(trieu[1]),
+      PRICE_UNIT_DECIMALS
+    );
+    return Math.round(millions * 1_000_000);
+  }
 
   return undefined;
 }
 
-/** True when the text carries a Vietnamese price unit (tỷ / triệu / tr). */
+/** True when the text carries a Vietnamese price unit (tỷ/tỉ/ty/ti, triệu, tr). */
 export function hasVietnamesePriceUnit(text: string): boolean {
-  return /t[ỷy]|tri[eệễ]u|tr\b/i.test(text);
+  return /t[ỷyỉi]|tri[eệễ]u|tr\b/i.test(text);
 }
 
 /**
@@ -133,11 +174,11 @@ function trimDecimals(n: number, maxDecimals: number): string {
 export function formatPriceForInput(vnd: number): string {
   if (!Number.isFinite(vnd) || vnd <= 0) return "";
   if (vnd >= 1_000_000_000) {
-    const s = `${trimDecimals(vnd / 1_000_000_000, 3)} tỷ`;
+    const s = `${trimDecimals(vnd / 1_000_000_000, 5)} tỷ`;
     if (parsePriceToVnd(s) === vnd) return s;
   }
   if (vnd >= 1_000_000) {
-    const s = `${trimDecimals(vnd / 1_000_000, 3)} triệu`;
+    const s = `${trimDecimals(vnd / 1_000_000, 5)} triệu`;
     if (parsePriceToVnd(s) === vnd) return s;
   }
   return String(vnd);

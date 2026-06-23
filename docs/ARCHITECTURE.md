@@ -484,22 +484,34 @@ rounding to integers:
   separators — "32,8" → 32.8, "45,75" → 45.75, "1.234,5" → 1234.5. NaN /
   Infinity / non-finite → null (VALIDATION_ERROR for required price/area; never
   trusts client formatting). Shared by the web actions AND the /api routes.
-- Per-field precision cap (no entry-time over-rounding, no float noise):
-    price       → raw VND, capped at 3 decimals (integers in practice)
-    area        → up to 2 decimals (32.8, 45.75)
-    frontage    → up to 2 decimals (3.65)
-    alley_width → up to 2 decimals (2.35)
+- One shared rounding rule — `roundToDecimalPlaces(value, 5)` in
+  `src/lib/format/price.ts` (rejects NaN/Infinity → NaN; callers guard):
+    area / frontage / alley_width → rounded to 5 decimals on save
+      (32,8123456789 → 32.81235 · 3,658912345 → 3.65891 · 2,35789999 → 2.3579)
+    price       → the expressed UNIT (tỷ/triệu) is rounded to 5 decimals, THEN
+      converted to integer raw VND ("8,123456789 tỷ" → 8.12346 tỷ → 8123460000)
     bedrooms / bathrooms → integer counts (rounded; no half-rooms)
+  Long decimal input is accepted freely and rounded once, at save.
 - Form inputs for area/frontage/alley_width are type="text" inputMode="decimal"
   so Vietnamese mobile keyboards can enter a comma or dot decimal (step="0.1"
   previously blocked 2-decimal values like 45.75). price stays a raw-VND number
   input. DB columns already store decimals — NO schema/RLS change.
-- Display never mutates the stored value: formatVND preserves decimals
-  (8_650_000_000 → "8.65 tỷ", 850_500_000 → "850.5 triệu") instead of the old
-  toFixed(1)/toFixed(0) rounding; area renders its stored value directly.
-- Quick Add parsers keep comma/dot decimals: parseLocaleFloat normalises both,
-  parseVietnamesePrice is unchanged ("8 tỷ 650" → 8_650_000_000), and the AI
-  sanitiser's string fallback no longer strips a comma decimal to an integer.
+- Display never mutates the stored value: formatVND shows up to 5 decimals in
+  the expressed unit, trailing zeros dropped (8_650_000_000 → "8.65 tỷ",
+  8_123_460_000 → "8.12346 tỷ", 850_123_460 → "850.12346 triệu"); area/frontage/
+  alley render their stored value directly (32.81235 → "32.81235 m²").
+- Quick Add parsers keep comma/dot decimals and the same rounding: the AI
+  extractor reuses parseVietnamesePrice (price unit rounded to 5) and the
+  service rounds area/frontage/alley to 5 on save, so a draft like
+  "32,8123456789m2 … 8,123456789 tỷ" persists as 32.81235 / 8123460000.
+- Filters use the same rules: price filters accept VN units + 5-decimal unit
+  rounding; area filters accept long decimals rounded to 5; invalid → ignored
+  (never a NaN query).
+- DB columns: price stays integer raw VND (unchanged). area/frontage/alley_width
+  must hold 5 decimals — migration `20240110000001_properties_decimal_scale.sql`
+  is a conditional, introspecting DO block that widens ONLY numeric(scale<5)
+  columns to numeric(14,5), leaves double precision / wide numeric untouched,
+  and aborts if a column is integer (manual review). NO RLS/policy change.
 
 #### Phase 3E — natural price input + filter parsing (one shared parser)
 

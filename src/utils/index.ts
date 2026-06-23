@@ -15,19 +15,18 @@ function trimDecimals(n: number, maxDecimals: number): string {
 /**
  * Format a VND price into a human-readable Vietnamese string. Preserves decimal
  * precision so brokers see real listing prices (display only; the stored value
- * is unchanged):
- *   8_650_000_000 → "8.65 tỷ"  |  3_250_000_000 → "3.25 tỷ"
- *   850_500_000   → "850.5 triệu"  |  750_000_000 → "750 triệu"
+ * is unchanged). Shows up to 5 decimals in the expressed unit, trailing zeros
+ * dropped — matching the 5-decimal save rounding:
+ *   8_650_000_000 → "8.65 tỷ"  |  8_123_460_000 → "8.12346 tỷ"
+ *   850_123_460   → "850.12346 triệu"  |  750_000_000 → "750 triệu"
  */
 export function formatVND(amount: number): string {
   if (!Number.isFinite(amount)) return "0 đ";
   if (amount >= 1_000_000_000) {
-    // Up to 2 decimals → e.g. 8.65 tỷ (no aggressive 1-decimal rounding).
-    return `${trimDecimals(amount / 1_000_000_000, 2)} tỷ`;
+    return `${trimDecimals(amount / 1_000_000_000, 5)} tỷ`;
   }
   if (amount >= 1_000_000) {
-    // Up to 1 decimal → e.g. 850.5 triệu (no integer-only rounding).
-    return `${trimDecimals(amount / 1_000_000, 1)} triệu`;
+    return `${trimDecimals(amount / 1_000_000, 5)} triệu`;
   }
   return amount.toLocaleString("vi-VN") + " đ";
 }

@@ -22,7 +22,11 @@ import {
   parsePriceToVnd,
   parseVietnamesePrice,
   hasVietnamesePriceUnit,
+  roundToDecimalPlaces,
 } from "@/lib/format/price";
+
+/** Decimal places kept on save for decimal-capable property fields. */
+const FIELD_DECIMALS = 5;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -99,29 +103,30 @@ function parsePositiveNumber(raw: string | undefined): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-/** Decimal-capable positive filter value (comma/dot), e.g. area "32,8" → 32.8.
- *  Invalid input → null (filter is ignored; never a NaN query). */
+/** Decimal-capable positive filter value (comma/dot), rounded to 5 decimals,
+ *  e.g. area "32,8123456789" → 32.81235. Invalid → null (filter ignored). */
 function parsePositiveDecimal(raw: string | undefined): number | null {
   if (!raw || !raw.trim()) return null;
   const n = parseLooseNumber(raw.trim());
-  return n !== null && n > 0 ? n : null;
+  return n !== null && n > 0 ? roundToDecimalPlaces(n, FIELD_DECIMALS) : null;
 }
 
 /**
  * Price filter value, expressed in tỷ to match the existing "Giá (tỷ)" filter
  * UI + query math (price_min * 1e9). Accepts a Vietnamese price expression
- * (8 tỷ / 8.65 tỷ / 850 triệu → converted to tỷ) OR a bare number (already tỷ).
- * Invalid input → null (filter ignored; never a NaN query).
+ * (8 tỷ / 8.65 tỷ / 850 triệu → converted to tỷ, with the unit already rounded
+ * to 5 decimals) OR a bare number (already tỷ, rounded to 5). Invalid → null
+ * (filter ignored; never a NaN query).
  */
 function parsePriceFilterTy(raw: string | undefined): number | null {
   if (!raw || !raw.trim()) return null;
   const t = raw.trim();
   if (hasVietnamesePriceUnit(t)) {
-    const vnd = parseVietnamesePrice(t);
+    const vnd = parseVietnamesePrice(t); // unit already rounded to 5 decimals
     return vnd !== undefined && vnd > 0 ? vnd / 1_000_000_000 : null;
   }
   const n = parseLooseNumber(t);
-  return n !== null && n > 0 ? n : null;
+  return n !== null && n > 0 ? roundToDecimalPlaces(n, FIELD_DECIMALS) : null;
 }
 
 function parseString(raw: string | undefined): string | null {
@@ -345,17 +350,11 @@ function num(v: unknown): number | null {
   return parseLooseNumber(v);
 }
 
-/** Round to a fixed number of decimal places (no float noise). */
-function roundTo(n: number, places: number): number {
-  const f = 10 ** places;
-  return Math.round((n + Number.EPSILON) * f) / f;
-}
-
-/** Decimal-capable dimension: > 0 → rounded to `places`; else null. */
+/** Decimal-capable dimension: > 0 → rounded to `places` (shared rule); else null. */
 function decimalField(v: unknown, places: number): number | null {
   const n = num(v);
   if (n === null || n <= 0) return null;
-  return roundTo(n, places);
+  return roundToDecimalPlaces(n, places);
 }
 
 /** Integer count (bedrooms/bathrooms): >= 0 → rounded to a whole number. */
@@ -374,11 +373,12 @@ export function validatePropertyInput(input: PropertyWriteInput): ValidatedPrope
     propertyTypeRaw && VALID_PROPERTY_TYPES.has(propertyTypeRaw)
       ? (propertyTypeRaw as PropertyType)
       : null;
-  // price accepts Vietnamese expressions (8 tỷ 650, 850 triệu, 8.65 tỷ) AND
-  // raw VND; the shared parser normalises every input to integer VND.
+  // price accepts Vietnamese expressions (8 tỷ 650, 850 triệu, 8,123456789 tỷ)
+  // AND raw VND; the shared parser rounds the unit to 5 decimals, then stores
+  // integer VND.
   const price = parsePriceToVnd(input.price ?? null);
-  // area keeps up to 2 decimals (e.g. 32.8, 45.75).
-  const area = decimalField(input.area, 2);
+  // area rounded to 5 decimals on save (e.g. 32,8123456789 → 32.81235).
+  const area = decimalField(input.area, FIELD_DECIMALS);
 
   if (!title) throw validationError("Vui lòng nhập tiêu đề.");
   if (!property_type) throw validationError("Vui lòng chọn loại bất động sản.");
@@ -404,8 +404,8 @@ export function validatePropertyInput(input: PropertyWriteInput): ValidatedPrope
     bedrooms: integerCount(input.bedrooms),
     bathrooms: integerCount(input.bathrooms),
     house_direction: str(input.house_direction),
-    frontage: decimalField(input.frontage, 2),
-    alley_width: decimalField(input.alley_width, 2),
+    frontage: decimalField(input.frontage, FIELD_DECIMALS),
+    alley_width: decimalField(input.alley_width, FIELD_DECIMALS),
     legal_status,
     description: str(input.description),
     strengths: str(input.strengths),

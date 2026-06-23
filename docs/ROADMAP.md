@@ -359,8 +359,34 @@ unchanged. No UI/schema/RLS/auth/billing/nav changes; no auto-posting.
 ```
 
 Verified: lint + typecheck + build pass; price parser round-trips checked
-against the spec examples. Next: **Phase 4 — Team UI MVP**. Vietnam SMS OTP
-provider stays paused; social OAuth still not needed.
+against the spec examples.
+
+**Phase 3F — 🟢 IMPLEMENTED** (uniform 5-decimal rounding for property numbers):
+
+```text
+- One shared rounding rule: roundToDecimalPlaces(value, 5) in
+  src/lib/format/price.ts (rejects NaN/Infinity). Used by the Properties service
+  AND the price parser, so create/edit/quick-add/API/filters round identically.
+- Decimal fields (area/frontage/alley_width) accept free long decimals (comma or
+  dot) and round to 5 on save: 32,8123456789 → 32.81235 · 3,658912345 → 3.65891
+  · 2,35789999 → 2.3579. Trailing zeros dropped on display.
+- Price: the expressed unit (tỷ/tỉ/ty/ti, triệu/trieu/tr) is rounded to 5
+  decimals, THEN stored as integer raw VND. 8,123456789 tỷ → 8.12346 tỷ →
+  8123460000; 850,123456789 triệu → 850.12346 triệu → 850123460. Existing cases
+  (8 tỷ 650, 850 triệu, 3,5 tỷ, raw VND) unchanged.
+- formatVND shows up to 5 decimals (zeros dropped): 8123460000 → "8.12346 tỷ".
+- bedrooms/bathrooms stay integers. Filters use the same rounding; invalid →
+  ignored (no NaN query).
+- DB: price stays integer raw VND. Conditional migration
+  20240110000001_properties_decimal_scale.sql widens ONLY numeric(scale<5)
+  area/frontage/alley_width columns to numeric(14,5); double precision / wide
+  numeric untouched; aborts on integer. No RLS/auth/billing/Team-UI/AI changes.
+```
+
+Verified: lint + typecheck + build pass; the 5-decimal rule checked against the
+spec examples (price + decimal + formatVND + round-trip). Next: **Phase 4 —
+Team UI MVP**. Vietnam SMS OTP provider stays paused; social OAuth still not
+needed.
 
 ### Phase 4 — Team UI MVP
 
