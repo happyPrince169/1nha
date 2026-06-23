@@ -389,16 +389,17 @@ spec examples (price + decimal + formatVND + round-trip).
 **Phase 3G — 🟢 IMPLEMENTED** (bare-number price rule for the price field):
 
 ```text
-- parsePriceToVnd now reads a UNIT-LESS price the way a broker means it:
-    bare decimal (8.35 / 8,35 / 3,5 / 8.123456789) → tỷ, unit rounded to 5dp
-      (8.350000000 → 8_350_000_000 · 8.123456789 → 8_123_460_000)
-    bare integer < 100        → tỷ  ("8" → 8e9 · "12" → 12e9)
-    bare integer ≥ 1_000_000  → raw VND  ("8350000000" unchanged)
-    bare integer 100…999_999  → AMBIGUOUS → null → existing validation error
-      (e.g. "850" could be 850 triệu or 850 tỷ; broker must add a unit)
-  NOTE: the prose hint "< 1000 → tỷ" conflicts with the explicit
-  parsePriceToVnd("850") === null assertion, so the implemented tỷ cutoff is 100
-  (satisfies 8/12 → tỷ AND 850 → null). A NUMBER argument stays raw VND (API).
+- parsePriceToVnd reads a UNIT-LESS price by the MAGNITUDE of the typed value
+  (decimals included — no integer/decimal special-case):
+    bare value < 100         → tỷ, unit rounded to 5dp
+      ("8" → 8e9 · "8.35" → 8_350_000_000 · "12.5" → 12_500_000_000 ·
+       "99.999999" → unit rounds to 100 → 100e9)
+    bare value ≥ 1_000_000   → raw VND ("8350000000"; "8350000000.7" → ...001)
+    bare value 100…999_999   → AMBIGUOUS → null, INCLUDING decimals
+      ("850" / "850.5" / "999999.5" → null → existing validation; add a unit)
+  Safety refinement: "850.5" is no longer read as 850.5 tỷ — a bare value in the
+  hundreds could mean triệu, so it is rejected, not silently saved as a huge
+  tỷ price. A NUMBER argument stays raw VND (API contract).
 - Unchanged: all unit expressions (8 tỷ 650 / 850 triệu / 3,5 tỷ /
   8,123456789 tỷ), raw VND ≥ 1e6, area/frontage/alley 5-decimal rounding,
   formatVND/formatPriceForInput, the free-text price input (no inputMode), and

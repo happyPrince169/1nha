@@ -530,18 +530,23 @@ formatPriceForInput(vnd) raw VND → human-friendly editable string, ONLY when i
 ```
 
 **Bare-number rule in the price field** (`parsePriceToVnd`, string input only —
-a NUMBER argument is always raw VND for the API contract): a broker who types
-"8.35" means 8.35 tỷ, not 8.35 VND, so:
+a NUMBER argument is always raw VND for the API contract). A broker who types a
+small number means tỷ; a number in the hundreds/thousands is genuinely
+ambiguous (850 could be 850 **triệu** or 850 **tỷ**) and must never be silently
+saved as an enormous tỷ value. Decided purely by the magnitude of the typed
+value — **decimals included**:
 
 ```text
-bare DECIMAL (8.35 / 8,35 / 3,5 / 8.123456789) → ×tỷ, unit rounded to 5 decimals
-  8.350000000 → 8.35 tỷ → 8_350_000_000 · 8.123456789 → 8.12346 tỷ → 8_123_460_000
-bare INTEGER:
-  < 100         → tỷ        "8" → 8_000_000_000 · "12" → 12_000_000_000
-  ≥ 1_000_000   → raw VND   "8350000000" → 8_350_000_000
-  100 … 999_999 → AMBIGUOUS → null (could be "850 triệu" or "850 tỷ")
-                  "850" → null → the existing "Vui lòng nhập giá (VND) hợp lệ."
-                  validation; broker adds a unit ("850 triệu" / "8 tỷ 650").
+< 100         → tỷ (unit rounded to 5 decimals)
+                "8" → 8_000_000_000 · "8.35" → 8_350_000_000 · "12.5" → 12_500_000_000
+                "8.123456789" → 8.12346 tỷ → 8_123_460_000
+                edge: "99.999999" rounds the unit to 100.00000 → 100_000_000_000
+≥ 1_000_000   → raw VND ("8350000000" → 8_350_000_000; decimals → integer VND,
+                "8350000000.7" → 8_350_000_001)
+100 … 999_999 → AMBIGUOUS → null, INCLUDING decimals
+                "850" / "850.5" / "999999.5" → null → the existing
+                "Vui lòng nhập giá (VND) hợp lệ." validation; the broker adds an
+                explicit unit ("850 triệu" / "8 tỷ 650").
 ```
 
 The middle band is rejected (not silently saved wrong). Explicit unit
