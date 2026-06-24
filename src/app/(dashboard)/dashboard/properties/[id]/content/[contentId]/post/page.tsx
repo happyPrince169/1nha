@@ -6,6 +6,7 @@ import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { toApiError } from "@/lib/api/errors";
 import { getGeneratedContentForProperty } from "@/lib/services/generated-content";
 import { getPropertyById } from "@/lib/services/properties";
+import { canManageGeneratedContent } from "@/lib/workspace/permissions";
 import { listPropertyImages } from "@/lib/services/property-images";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
@@ -97,6 +98,9 @@ export default async function PostAssistantPage({ params }: Props) {
   });
 
   const isPosted = content.status === "posted";
+  // Phase 4C: only managers may mark posting status. Reading/copying is open to
+  // all active members.
+  const canManage = canManageGeneratedContent(ctx, property);
   const locationParts = [
     property.district,
     property.ward,
@@ -229,14 +233,16 @@ export default async function PostAssistantPage({ params }: Props) {
         </CardContent>
       </Card>
 
-      {/* ── G. Mark posted ─────────────────────────────────────────── */}
-      <MarkPostedForm
-        contentId={contentId}
-        postedAt={content.posted_at ?? null}
-        channelName={content.channel_name ?? null}
-        postUrl={content.post_url ?? null}
-        alreadyPosted={isPosted}
-      />
+      {/* ── G. Mark posted (managers only) ─────────────────────────── */}
+      {canManage && (
+        <MarkPostedForm
+          contentId={contentId}
+          postedAt={content.posted_at ?? null}
+          channelName={content.channel_name ?? null}
+          postUrl={content.post_url ?? null}
+          alreadyPosted={isPosted}
+        />
+      )}
 
       {/* Posted state — show link to content detail */}
       {isPosted && (

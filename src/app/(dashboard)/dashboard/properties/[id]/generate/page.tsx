@@ -5,9 +5,11 @@ import { notFound } from "next/navigation";
 import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { toApiError } from "@/lib/api/errors";
 import { getPropertyById } from "@/lib/services/properties";
+import { canManageProperty } from "@/lib/workspace/permissions";
 import { listStyleProfiles } from "@/lib/services/style-profiles";
 import { generatePropertyContent } from "./actions";
 import { GenerateForm, type StyleProfileOption } from "./generate-form";
+import { ManageForbidden } from "@/components/property/manage-notice";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +33,28 @@ export default async function GeneratePage({ params }: Props) {
   } catch (err) {
     if (toApiError(err).code === "NOT_FOUND") notFound();
     throw err;
+  }
+
+  // Phase 4C: generating content is a management action on the property.
+  if (!canManageProperty(ctx, property)) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-xl font-semibold tracking-tight">Tạo content AI</h1>
+          <Link
+            href={`/dashboard/properties/${id}`}
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          >
+            ← Chi tiết
+          </Link>
+        </div>
+        <ManageForbidden
+          title="Bạn không thể tạo content cho nguồn này"
+          backHref={`/dashboard/properties/${id}`}
+          backLabel="← Về chi tiết nguồn"
+        />
+      </div>
+    );
   }
 
   // Saved writing-style profiles for the workspace (default first, then newest).

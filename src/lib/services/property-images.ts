@@ -25,6 +25,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import type { RequestContext } from "@/lib/workspace/request-context";
+import { assertCanManageProperty } from "@/lib/workspace/permissions";
 import { validationError, notFound, internalError } from "@/lib/api/errors";
 import { trackEvent } from "@/lib/usage";
 import {
@@ -219,6 +220,34 @@ async function requirePropertyInOrg(
 }
 
 /**
+ * Like requirePropertyInOrg, but ALSO enforces manage permission (Phase 4C):
+ * Owner/Admin may manage any property's images; a Member only their own-created
+ * or assigned-to-them property. Use for every MUTATING image operation. Reads
+ * (list/get) stay on requirePropertyInOrg — images are visible to all members.
+ */
+async function requireManageablePropertyInOrg(
+  ctx: RequestContext,
+  propertyId: string
+): Promise<void> {
+  assertUuid(propertyId, "Mã bất động sản");
+
+  const { data, error } = await ctx.supabase
+    .from("properties")
+    .select("id, created_by, assigned_to")
+    .eq("id", propertyId)
+    .eq("organization_id", ctx.organizationId)
+    .maybeSingle();
+
+  if (error) throw internalError(error.message);
+  if (!data) throw notFound("Không tìm thấy bất động sản.");
+
+  assertCanManageProperty(ctx, data as {
+    created_by: string | null;
+    assigned_to: string | null;
+  });
+}
+
+/**
  * Verify the image belongs to the given property. Call AFTER
  * requirePropertyInOrg so the org check has already gated the parent.
  */
@@ -371,7 +400,7 @@ export async function requestPropertyImageUpload(
   propertyId: string,
   input: RequestUploadInput
 ): Promise<RequestUploadResult> {
-  await requirePropertyInOrg(ctx, propertyId);
+  await requireManageablePropertyInOrg(ctx, propertyId);
 
   const fileName = requireNonEmptyString(input?.fileName, "Tên tệp");
   assertImageMime(input?.mimeType);
@@ -458,7 +487,7 @@ export async function requestPropertyImageUploadTargets(
   propertyId: string,
   input: RequestUploadTargetsInput
 ): Promise<RequestUploadTargetsResult> {
-  await requirePropertyInOrg(ctx, propertyId);
+  await requireManageablePropertyInOrg(ctx, propertyId);
 
   const fileName = requireNonEmptyString(input?.fileName, "Tên tệp");
   const width = assertPositiveDimension(input?.width, "Chiều rộng ảnh");
@@ -535,7 +564,7 @@ export async function finalizePropertyImageUpload(
   propertyId: string,
   input: FinalizeUploadInput
 ): Promise<{ id: string }> {
-  await requirePropertyInOrg(ctx, propertyId);
+  await requireManageablePropertyInOrg(ctx, propertyId);
   const imageId = input?.imageId ?? "";
   const image = await requireImageRow(ctx, propertyId, imageId);
 
@@ -572,7 +601,7 @@ export async function updatePropertyImage(
   imageId: string,
   input: UpdatePropertyImageInput
 ): Promise<{ id: string }> {
-  await requirePropertyInOrg(ctx, propertyId);
+  await requireManageablePropertyInOrg(ctx, propertyId);
   await requireImageRow(ctx, propertyId, imageId);
 
   const patch: { caption?: string | null; alt_text?: string | null } = {};
@@ -614,7 +643,7 @@ export async function deletePropertyImage(
   propertyId: string,
   imageId: string
 ): Promise<{ id: string }> {
-  await requirePropertyInOrg(ctx, propertyId);
+  await requireManageablePropertyInOrg(ctx, propertyId);
   const image = await requireImageRow(ctx, propertyId, imageId);
 
   // Delete bytes first; failures here are swallowed so DB cleanup always
@@ -668,7 +697,7 @@ export async function setPropertyCoverImage(
   propertyId: string,
   imageId: string
 ): Promise<{ id: string }> {
-  await requirePropertyInOrg(ctx, propertyId);
+  await requireManageablePropertyInOrg(ctx, propertyId);
   await requireImageRow(ctx, propertyId, imageId);
 
   const { error: clearError } = await ctx.supabase
@@ -708,7 +737,7 @@ export async function reorderPropertyImages(
   propertyId: string,
   orderedImageIds: string[]
 ): Promise<{ ok: true }> {
-  await requirePropertyInOrg(ctx, propertyId);
+  await requireManageablePropertyInOrg(ctx, propertyId);
 
   if (!Array.isArray(orderedImageIds) || orderedImageIds.length === 0) {
     throw validationError("Danh sách ảnh không hợp lệ.");

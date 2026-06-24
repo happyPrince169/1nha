@@ -6,6 +6,8 @@ import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { toApiError } from "@/lib/api/errors";
 import { getPropertyById } from "@/lib/services/properties";
 import { buildAssigneeContext } from "@/lib/services/workspace";
+import { canEditProperty } from "@/lib/workspace/permissions";
+import { ManageForbidden } from "@/components/property/manage-notice";
 import { listPropertyImages } from "@/lib/services/property-images";
 import { updateProperty } from "./actions";
 import { PropertyForm } from "../../property-form";
@@ -35,6 +37,30 @@ export default async function EditPropertyPage({ params }: Props) {
   } catch (err) {
     if (toApiError(err).code === "NOT_FOUND") notFound();
     throw err;
+  }
+
+  // Phase 4C: a Member who is neither creator nor assignee cannot edit. Show a
+  // friendly read-only block instead of the editable form (the update action +
+  // API enforce this too).
+  if (!canEditProperty(ctx, property)) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-xl font-semibold tracking-tight">Chỉnh sửa</h1>
+          <Link
+            href={`/dashboard/properties/${id}`}
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+          >
+            ← Chi tiết
+          </Link>
+        </div>
+        <ManageForbidden
+          title="Bạn không thể chỉnh sửa nguồn này"
+          backHref={`/dashboard/properties/${id}`}
+          backLabel="← Về chi tiết nguồn"
+        />
+      </div>
+    );
   }
 
   // Bind the property id into the action on the server so the client never

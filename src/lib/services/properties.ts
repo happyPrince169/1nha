@@ -16,6 +16,11 @@ import "server-only";
 
 import type { RequestContext } from "@/lib/workspace/request-context";
 import {
+  canEditProperty,
+  canArchiveProperty,
+  assertCanManageProperty,
+} from "@/lib/workspace/permissions";
+import {
   validationError,
   forbidden,
   notFound,
@@ -323,6 +328,22 @@ export async function getPropertyById(
 }
 
 // ---------------------------------------------------------------------------
+// getManageableProperty — org-scoped fetch + manage-permission gate (Phase 4C)
+//
+// NOT_FOUND across orgs / missing; FORBIDDEN when the caller (a Member who is
+// neither creator nor assignee) may not manage it. Shared by the generated
+// content + post-assistant services so the property rule lives in one place.
+// ---------------------------------------------------------------------------
+export async function getManageableProperty(
+  ctx: RequestContext,
+  propertyId: string
+): Promise<PropertyRecord> {
+  const property = await getPropertyById(ctx, propertyId);
+  assertCanManageProperty(ctx, property);
+  return property;
+}
+
+// ---------------------------------------------------------------------------
 // Write input + validation
 // ---------------------------------------------------------------------------
 export type PropertyWriteInput = {
@@ -562,23 +583,24 @@ export async function updateProperty(
 ): Promise<void> {
   const v = validatePropertyInput(input);
 
-  // Resolve the assignee only when the caller supplied the field. This needs
-  // the current assignee (so a Member may keep an existing assignment) and also
-  // gives an org-scoped existence check before the update runs.
+  // Fetch the property first (org-scoped) so we can both authorise the edit and
+  // resolve the assignee against the CURRENT value. Owner/Admin manage any
+  // property; a Member only their own-created or assigned-to-them property.
+  const current = await getPropertyById(ctx, propertyId);
+  if (!canEditProperty(ctx, current)) {
+    throw forbidden(
+      "Bạn không có quyền chỉnh sửa nguồn này. Chỉ người tạo, người phụ trách hoặc quản trị viên mới có thể sửa."
+    );
+  }
+
+  // Resolve the assignee only when the caller supplied the field (a Member may
+  // keep the existing assignee unchanged or set themselves; never reassign).
   const patch: ValidatedProperty & { assigned_to?: string | null } = { ...v };
   if (input.assigned_to !== undefined) {
-    const { data: cur, error: curErr } = await ctx.supabase
-      .from("properties")
-      .select("assigned_to")
-      .eq("id", propertyId)
-      .eq("organization_id", ctx.organizationId)
-      .maybeSingle();
-    if (curErr) throw internalError(curErr.message);
-    if (!cur) throw notFound("Không tìm thấy bất động sản.");
     patch.assigned_to = await resolveAssignee(
       ctx,
       input.assigned_to,
-      (cur as { assigned_to: string | null }).assigned_to
+      current.assigned_to
     );
   }
 
@@ -600,6 +622,14 @@ export async function archiveProperty(
   ctx: RequestContext,
   propertyId: string
 ): Promise<void> {
+  // Authorise against ownership first (Owner/Admin → any; Member → own/assigned).
+  const current = await getPropertyById(ctx, propertyId);
+  if (!canArchiveProperty(ctx, current)) {
+    throw forbidden(
+      "Bạn không có quyền lưu trữ nguồn này. Chỉ người tạo, người phụ trách hoặc quản trị viên mới có thể lưu trữ."
+    );
+  }
+
   const { data, error } = await ctx.supabase
     .from("properties")
     .update({ status: "archived" })

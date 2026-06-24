@@ -34,7 +34,7 @@ import {
 import { trackEvent } from "@/lib/usage";
 import { generateContent } from "@/lib/ai";
 import { buildPropertyPrompt } from "@/lib/prompts/content";
-import { getPropertyById } from "@/lib/services/properties";
+import { getPropertyById, getManageableProperty } from "@/lib/services/properties";
 import { getStyleProfile } from "@/lib/services/style-profiles";
 import type {
   ContentPlatform,
@@ -386,8 +386,10 @@ async function runGeneration(
   options: GenerationOptions,
   parentContentId: string | null
 ): Promise<GeneratedContentRecord> {
-  // Org-scoped property fetch (throws NOT_FOUND across orgs / missing).
-  const property = await getPropertyById(ctx, propertyId);
+  // Org-scoped property fetch + manage gate (Phase 4C): generating content is a
+  // management action, so a Member must own/be assigned the parent property.
+  // NOT_FOUND across orgs / missing; FORBIDDEN when unmanaged.
+  const property = await getManageableProperty(ctx, propertyId);
 
   // PropertyRecord allows nulls on some fields; buildPropertyPrompt handles
   // missing values defensively (it omits absent facts), so the cast is safe and
@@ -662,6 +664,8 @@ export async function updateGeneratedContent(
   input: UpdateGeneratedContentInput
 ): Promise<GeneratedContentRecord> {
   const existing = await requireContentInOrg(ctx, contentId, "id, property_id");
+  // Editing content is a management action on the parent property (Phase 4C).
+  await getManageableProperty(ctx, existing.property_id);
 
   const patch: Record<string, unknown> = {};
   let contentChanged = false;
@@ -728,6 +732,8 @@ export async function archiveGeneratedContent(
   contentId: string
 ): Promise<GeneratedContentRecord> {
   const existing = await requireContentInOrg(ctx, contentId, "id, property_id");
+  // Archiving content is a management action on the parent property (Phase 4C).
+  await getManageableProperty(ctx, existing.property_id);
 
   const { data, error } = await ctx.supabase
     .from("generated_contents")

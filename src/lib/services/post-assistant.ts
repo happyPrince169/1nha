@@ -28,7 +28,10 @@ import {
   getGeneratedContentForProperty,
   type GeneratedContentRecord,
 } from "@/lib/services/generated-content";
-import { getPropertyById } from "@/lib/services/properties";
+import {
+  getPropertyById,
+  getManageableProperty,
+} from "@/lib/services/properties";
 import {
   listPropertyImages,
   type ImageUrlVariant,
@@ -296,6 +299,31 @@ export async function getPostAssistantImageUrls(
 // Each verifies content access (org-scoped) then updates the existing posting
 // columns on generated_contents. No social API is ever called.
 // ---------------------------------------------------------------------------
+/**
+ * Resolve the content's parent property (org-scoped) and assert the caller may
+ * manage it (Phase 4C). Marking copied/scheduled/posted is a management action,
+ * so a Member must own/be assigned the parent property. NOT_FOUND across orgs /
+ * missing content; FORBIDDEN when unmanaged.
+ */
+async function requireManageableContentParent(
+  ctx: RequestContext,
+  contentId: string
+): Promise<void> {
+  assertUuid(contentId, "Mã content");
+
+  const { data, error } = await ctx.supabase
+    .from("generated_contents")
+    .select("property_id")
+    .eq("id", contentId)
+    .eq("organization_id", ctx.organizationId)
+    .maybeSingle();
+
+  if (error) throw internalError(error.message);
+  if (!data) throw notFound("Không tìm thấy content.");
+
+  await getManageableProperty(ctx, (data as { property_id: string }).property_id);
+}
+
 async function applyPostingUpdate(
   ctx: RequestContext,
   contentId: string,
@@ -339,6 +367,7 @@ export async function markContentCopied(
   ctx: RequestContext,
   contentId: string
 ): Promise<MarkCopiedResult> {
+  await requireManageableContentParent(ctx, contentId);
   const result = await applyPostingUpdate(ctx, contentId, {
     copied_at: new Date().toISOString(),
   });
@@ -358,6 +387,7 @@ export async function markContentScheduled(
   contentId: string,
   input: MarkScheduledInput = {}
 ): Promise<MarkCopiedResult> {
+  await requireManageableContentParent(ctx, contentId);
   const scheduledAt = parseOptionalDate(input?.scheduledAt, "Thời điểm hẹn đăng");
 
   return applyPostingUpdate(ctx, contentId, {
@@ -377,6 +407,7 @@ export async function markContentPosted(
   contentId: string,
   input: MarkPostedInput = {}
 ): Promise<MarkCopiedResult> {
+  await requireManageableContentParent(ctx, contentId);
   const postedAt =
     parseOptionalDate(input?.postedAt, "Thời điểm đăng") ??
     new Date().toISOString();

@@ -492,6 +492,52 @@ scoping unchanged). **Deferred to 4C:** deeper per-property access control,
 member role changes/removal, workspace switcher, reassigning a colleague's
 source as a plain member.
 
+#### Phase 4C — Team permissions hardening (🟢 DONE)
+
+MVP permission hardening so a small team can safely share a workspace. No schema
+or RLS change — enforcement lives in the **service layer** (the single boundary
+all web Server Actions + JSON API routes share).
+
+Permission model:
+
+```text
+Visibility  — all active members READ the full workspace inventory.
+Management  — Owner/Admin manage everything; a Member manages a property only
+              when properties.created_by = them OR properties.assigned_to = them.
+Assignment  — only Owner/Admin assign to OTHER members (Phase 4B rule kept).
+```
+
+One auditable helper module `src/lib/workspace/permissions.ts`
+(`canManageProperty` / `canEditProperty` / `canArchiveProperty` /
+`canManagePropertyImages` / `canManageGeneratedContent` /
+`canAssignPropertyToOthers` / `assertCanManageProperty`) backs every check.
+
+Hardened service write paths (FORBIDDEN when a Member oversteps; NOT_FOUND stays
+for cross-org / missing):
+
+```text
+properties        — updateProperty, archiveProperty (createProperty open to all)
+property-images   — request/finalize upload, update meta, delete, set cover, reorder
+generated-content — generate, regenerate, edit, archive (reads stay open)
+post-assistant    — mark copied / scheduled / posted (reads stay open)
+```
+
+`getManageableProperty(ctx, id)` (properties service) is the shared gate the
+content + post-assistant services call. UI reflects the same rule: detail hides
+edit/archive/generate (read-only note); edit + generate pages show a friendly
+forbidden block; the images page + ImageCard render read-only with controls
+hidden; content detail/post pages hide edit/archive/mark/regenerate for
+non-managers. API routes inherit all of this (no UI-only checks).
+
+**RLS posture:** the Phase 2A `*_member_all` policies still grant any active
+member full CRUD — RLS remains the **organization** boundary; the service layer
+is the **per-property** boundary. Tightening RLS to creator/assignee/role is
+deferred (would need role lookups + parent-property joins in every policy).
+
+**Deferred to 4D:** member role change / remove member (no `organization_members`
+write policy yet); DB-level (RLS) per-property permissions; per-property ACL
+tables; workspace switcher; real email invite; audit log.
+
 ### Phase 5 — Mobile app skeleton (Expo React Native, later)
 
 ```text

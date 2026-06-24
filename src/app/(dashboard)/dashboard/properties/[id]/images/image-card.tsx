@@ -24,6 +24,8 @@ type ImageCardProps = {
   altText: string | null;
   isCover: boolean;
   sizeBytes: number | null;
+  /** Phase 4C: hide cover/delete/caption controls when the user can't manage. */
+  canManage?: boolean;
 };
 
 const META_INITIAL: UpdateImageMetaState = { error: null };
@@ -40,6 +42,7 @@ export function ImageCard({
   altText,
   isCover,
   sizeBytes,
+  canManage = true,
 }: ImageCardProps) {
   const [showMeta, setShowMeta] = useState(false);
 
@@ -111,7 +114,9 @@ export function ImageCard({
           </p>
         )}
 
-        {/* Primary action row */}
+        {/* Primary action row — hidden entirely for read-only viewers */}
+        {canManage && (
+        <>
         <div className="flex gap-2">
           {!isCover && (
             <Button
@@ -191,6 +196,8 @@ export function ImageCard({
               {metaPending ? "Đang lưu…" : "Lưu"}
             </Button>
           </form>
+        )}
+        </>
         )}
       </div>
     </div>

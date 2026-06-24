@@ -8,6 +8,7 @@ import {
   listAssignableMembers,
   memberDisplayLabel,
 } from "@/lib/services/workspace";
+import { canManageProperty } from "@/lib/workspace/permissions";
 import { listPropertyImages } from "@/lib/services/property-images";
 import { listPropertyGeneratedContents } from "@/lib/services/generated-content";
 import { toApiError } from "@/lib/api/errors";
@@ -20,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ArchiveButton } from "./archive-button";
 import { StatusBadge } from "../status-badge";
+import { ReadOnlyNote } from "@/components/property/manage-notice";
 
 // ---------------------------------------------------------------------------
 // Label maps (reused in the content history section below)
@@ -104,6 +106,9 @@ export default async function PropertyDetailPage({ params }: Props) {
   const createdByLabel = labelForUser(property.created_by) ?? "Không rõ";
   const assignedLabel = labelForUser(property.assigned_to) ?? "Chưa phân công";
 
+  // Phase 4C: management controls (edit/archive/generate) only for managers.
+  const canManage = canManageProperty(ctx, property);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
@@ -116,7 +121,7 @@ export default async function PropertyDetailPage({ params }: Props) {
         <StatusBadge status={property.status} />
       </div>
 
-      {property.status !== "archived" && (
+      {property.status !== "archived" && canManage && (
         <div className="flex flex-col gap-2">
           <LinkButton
             href={`/dashboard/properties/${id}/generate`}
@@ -137,6 +142,10 @@ export default async function PropertyDetailPage({ params }: Props) {
             <ArchiveButton id={id} />
           </div>
         </div>
+      )}
+
+      {property.status !== "archived" && !canManage && (
+        <ReadOnlyNote message="Bạn chỉ có quyền xem nguồn này. Chỉ người tạo, người phụ trách hoặc quản trị viên mới có thể chỉnh sửa, lưu trữ hoặc tạo content." />
       )}
 
       <Card>

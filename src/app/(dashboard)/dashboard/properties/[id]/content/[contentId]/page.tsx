@@ -7,6 +7,7 @@ import { toApiError } from "@/lib/api/errors";
 import { getGeneratedContentForProperty } from "@/lib/services/generated-content";
 import { getStyleProfile } from "@/lib/services/style-profiles";
 import { getPropertyById } from "@/lib/services/properties";
+import { canManageGeneratedContent } from "@/lib/workspace/permissions";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,6 +19,7 @@ import { ContentEditForm } from "../content-edit-form";
 import { MarkPostedForm } from "../mark-posted-form";
 import { NotesForm } from "../notes-form";
 import { ArchiveContentButton } from "../archive-content-button";
+import { ReadOnlyNote } from "@/components/property/manage-notice";
 import type { ContentStatus } from "@/types";
 
 export const metadata: Metadata = { title: "Content đã tạo" };
@@ -96,17 +98,23 @@ export default async function ContentOutputPage({ params }: Props) {
     }
   }
 
-  // Property header (best-effort; the content already confirmed access).
+  // Property header + Phase 4C manage permission (best-effort; the content
+  // already confirmed org access). A non-manager sees read-only content.
   let property: { id: string; title: string } | null = null;
+  let canManage = false;
   try {
     const p = await getPropertyById(ctx, id);
     property = { id: p.id, title: p.title };
+    canManage = canManageGeneratedContent(ctx, p);
   } catch {
     property = null;
+    canManage = false;
   }
 
   const status = (content.status ?? "draft") as ContentStatus;
   const isArchived = status === "archived";
+  // Edit / archive / mark / regenerate require managing the parent property.
+  const readOnly = isArchived || !canManage;
 
   return (
     <div className="flex flex-col gap-4">
@@ -199,14 +207,17 @@ export default async function ContentOutputPage({ params }: Props) {
             </p>
           )}
         </CardHeader>
-        <CardContent>
-          {isArchived ? (
-            // Archived: read-only view
+        <CardContent className="flex flex-col gap-3">
+          {!isArchived && !canManage && (
+            <ReadOnlyNote message="Bạn chỉ có quyền xem content của nguồn này. Chỉ người tạo, người phụ trách hoặc quản trị viên mới có thể chỉnh sửa." />
+          )}
+          {readOnly ? (
+            // Archived or no manage permission: read-only view
             <p className="whitespace-pre-wrap text-sm leading-relaxed">
               {content.content}
             </p>
           ) : (
-            // Active: inline editable textarea
+            // Active + manageable: inline editable textarea
             <ContentEditForm
               contentId={contentId}
               initialText={content.content}
@@ -234,8 +245,8 @@ export default async function ContentOutputPage({ params }: Props) {
         </Link>
       )}
 
-      {/* Mark as posted form */}
-      {!isArchived && (
+      {/* Mark as posted form — managers only */}
+      {!readOnly && (
         <MarkPostedForm
           contentId={contentId}
           postedAt={content.posted_at ?? null}
@@ -247,34 +258,45 @@ export default async function ContentOutputPage({ params }: Props) {
 
       <Separator />
 
-      {/* Notes */}
+      {/* Notes — editable for managers, read-only otherwise */}
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Ghi chú nội bộ</CardTitle>
         </CardHeader>
         <CardContent>
-          <NotesForm
-            contentId={contentId}
-            initialNotes={content.notes ?? null}
-          />
+          {canManage ? (
+            <NotesForm
+              contentId={contentId}
+              initialNotes={content.notes ?? null}
+            />
+          ) : content.notes ? (
+            <p className="whitespace-pre-wrap text-sm text-muted-foreground">
+              {content.notes}
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">Chưa có ghi chú.</p>
+          )}
         </CardContent>
       </Card>
 
-      <Separator />
+      {/* Generate another — managers only */}
+      {canManage && (
+        <>
+          <Separator />
+          <Link
+            href={`/dashboard/properties/${id}/generate`}
+            className={cn(
+              buttonVariants({ variant: "outline" }),
+              "h-11 w-full justify-center"
+            )}
+          >
+            ✨ Tạo content mới
+          </Link>
+        </>
+      )}
 
-      {/* Generate another */}
-      <Link
-        href={`/dashboard/properties/${id}/generate`}
-        className={cn(
-          buttonVariants({ variant: "outline" }),
-          "h-11 w-full justify-center"
-        )}
-      >
-        ✨ Tạo content mới
-      </Link>
-
-      {/* Archive */}
-      {!isArchived && (
+      {/* Archive — managers only */}
+      {!readOnly && (
         <ArchiveContentButton contentId={contentId} />
       )}
     </div>

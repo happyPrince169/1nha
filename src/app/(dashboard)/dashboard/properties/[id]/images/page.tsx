@@ -5,12 +5,14 @@ import { notFound } from "next/navigation";
 import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { toApiError } from "@/lib/api/errors";
 import { getPropertyById } from "@/lib/services/properties";
+import { canManagePropertyImages } from "@/lib/workspace/permissions";
 import { listPropertyImages } from "@/lib/services/property-images";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ImageUploadForm } from "./image-upload-form";
 import { ImageCard } from "./image-card";
+import { ReadOnlyNote } from "@/components/property/manage-notice";
 
 export const metadata: Metadata = { title: "Hình ảnh căn nhà" };
 
@@ -51,7 +53,10 @@ export default async function PropertyImagesPage({ params, searchParams }: Props
     error = toApiError(err).message;
   }
 
-  const canUpload = property.status !== "archived";
+  // Phase 4C: only managers (Owner/Admin, or the creator/assignee) may mutate
+  // images. Everyone in the workspace can still view them.
+  const canManage = canManagePropertyImages(ctx, property);
+  const canUpload = canManage && property.status !== "archived";
 
   return (
     <div className="flex flex-col gap-4">
@@ -91,6 +96,11 @@ export default async function PropertyImagesPage({ params, searchParams }: Props
             <ImageUploadForm propertyId={id} />
           </CardContent>
         </Card>
+      )}
+
+      {/* Read-only note for members without manage permission */}
+      {!canManage && (
+        <ReadOnlyNote message="Bạn chỉ có quyền xem ảnh của nguồn này." />
       )}
 
       {/* Error */}
@@ -137,6 +147,7 @@ export default async function PropertyImagesPage({ params, searchParams }: Props
                 altText={img.alt_text}
                 isCover={img.is_cover}
                 sizeBytes={img.size_bytes}
+                canManage={canManage}
               />
             ))}
           </div>

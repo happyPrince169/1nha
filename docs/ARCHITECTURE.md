@@ -932,6 +932,61 @@ and a malformed `assigned_to` is ignored rather than crashing.
 **Deferred to 4C:** deeper per-property access control, a Member reassigning a
 colleague's source, member role changes/removal, workspace switcher.
 
+### Team permissions hardening (Phase 4C)
+
+MVP permission model so a small team can share a workspace safely. **The service
+layer is the permission boundary** — every web Server Action and JSON API route
+funnels through the same services, so there are no UI-only or client-trusted
+checks. No schema or RLS change.
+
+**Model.** Visibility: all active members READ the full workspace inventory.
+Management: Owner/Admin manage everything; a Member manages a property only when
+`created_by = them` OR `assigned_to = them`. Assignment-to-others stays
+Owner/Admin-only (Phase 4B `resolveAssignee`).
+
+**One helper module** — `src/lib/workspace/permissions.ts`:
+`isWorkspaceManager`, `canManageProperty` (+ intent aliases `canEditProperty` /
+`canArchiveProperty` / `canManagePropertyImages` / `canManageGeneratedContent`),
+`canAssignPropertyToOthers`, and `assertCanManageProperty` (throws FORBIDDEN).
+`canManageProperty` is the single predicate; the aliases keep call sites
+readable and the rule un-duplicated.
+
+**Service enforcement** (FORBIDDEN when a Member oversteps; NOT_FOUND preserved
+for cross-org / missing):
+
+- **properties**: `updateProperty` + `archiveProperty` fetch the row, assert
+  `canEdit/canArchive`, then proceed. `getManageableProperty(ctx, id)` =
+  `getPropertyById` + `assertCanManageProperty` — the shared gate reused by the
+  content + post-assistant services. `createProperty` stays open to all active
+  members (creator becomes `created_by`/`assigned_to`).
+- **property-images**: a new `requireManageablePropertyInOrg` guard replaces the
+  org-only `requirePropertyInOrg` on every MUTATION (request/finalize upload,
+  update meta, delete, set cover, reorder). Reads (`list`/`get`) stay org-only —
+  images remain visible to all members.
+- **generated-content**: `runGeneration` (generate + regenerate),
+  `updateGeneratedContent`, `archiveGeneratedContent` call `getManageableProperty`
+  on the parent. Reads/lists unchanged.
+- **post-assistant**: `markContentCopied/Scheduled/Posted` call
+  `requireManageableContentParent` (resolves the content's property, then
+  `getManageableProperty`). Read package + image URLs stay open.
+
+**UI** mirrors the services: property detail hides edit/archive/generate behind a
+read-only note; edit + generate pages render a friendly forbidden block; the
+images page + `ImageCard` go read-only (upload/cover/delete/caption hidden);
+content detail + post pages hide edit/archive/mark/regenerate for non-managers
+(copy-to-clipboard + viewing stay open). `src/components/property/manage-notice.tsx`
+holds the shared `ReadOnlyNote` / `ManageForbidden` components.
+
+**RLS posture (reviewed, unchanged).** The Phase 2A `*_member_all` policies
+grant any active member full CRUD, so **RLS remains the organization boundary**
+and the **service layer is the per-property boundary**. Tightening RLS to
+creator/assignee/role would need role lookups + parent-property joins inside
+every policy (properties, images-via-parent, content) — higher risk, deferred.
+
+**Deferred to 4D:** member role change / remove member (no `organization_members`
+UPDATE/DELETE policy yet); DB-level per-property RLS; per-property ACL tables;
+workspace switcher; real email invite; audit log.
+
 ### API authentication contract (Phase 3A.1)
 
 `getRequestContext()` authenticates from **two** sources, both validated
