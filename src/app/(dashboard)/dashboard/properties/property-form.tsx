@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { formatPriceForInput } from "@/lib/format/price";
+import type { AssigneeContext } from "@/lib/workspace/assignee";
 
 /**
  * Display a stored/draft price in the price input. A numeric value (raw VND from
@@ -51,12 +52,16 @@ export type PropertyFormDefaults = {
   weaknesses?: string;
   owner_note?: string;
   planning_note?: string;
+  /** Phase 4B: preselected assignee. undefined → default to current user. */
+  assigned_to?: string | null;
 };
 
 type PropertyFormProps = {
   action: FormAction;
   defaultValues?: PropertyFormDefaults;
   submitLabel?: string;
+  /** Phase 4B assignee context (members + role). Omit to hide the field. */
+  assignee?: AssigneeContext;
 };
 
 const initialState: CreatePropertyState = { error: null };
@@ -65,6 +70,7 @@ export function PropertyForm({
   action,
   defaultValues = {},
   submitLabel = "Lưu",
+  assignee,
 }: PropertyFormProps) {
   const [state, formAction, isPending] = useActionState(action, initialState);
 
@@ -72,7 +78,11 @@ export function PropertyForm({
     <form action={formAction} className="flex flex-col gap-4">
       {state.error && <FormError>{state.error}</FormError>}
 
-      <PropertyFields defaultValues={defaultValues} disabled={isPending} />
+      <PropertyFields
+        defaultValues={defaultValues}
+        disabled={isPending}
+        assignee={assignee}
+      />
 
       <Button type="submit" className="h-11 w-full" disabled={isPending}>
         {isPending ? "Đang lưu…" : submitLabel}
@@ -90,13 +100,30 @@ export function PropertyForm({
 export function PropertyFields({
   defaultValues = {},
   disabled = false,
+  assignee,
 }: {
   defaultValues?: PropertyFormDefaults;
   disabled?: boolean;
+  assignee?: AssigneeContext;
 }) {
   const isPending = disabled;
   return (
     <>
+      {assignee && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Người phụ trách</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AssigneeField
+              assignee={assignee}
+              defaultAssignedTo={defaultValues.assigned_to}
+              disabled={isPending}
+            />
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Thông tin cơ bản</CardTitle>
@@ -385,6 +412,80 @@ export function PropertyFields({
         </CardContent>
       </Card>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AssigneeField — "Người phụ trách" (Phase 4B)
+//
+// Owner/Admin get an editable <Select> (Chưa phân công + Tôi phụ trách + each
+// other member). A plain Member sees a read-only display + a hidden input that
+// preserves the current assignee (they cannot reassign — service-enforced too).
+// ---------------------------------------------------------------------------
+function AssigneeField({
+  assignee,
+  defaultAssignedTo,
+  disabled,
+}: {
+  assignee: AssigneeContext;
+  defaultAssignedTo: string | null | undefined;
+  disabled: boolean;
+}) {
+  const { currentUserId, canAssignOthers, members } = assignee;
+
+  // undefined (create) → default to current user; null/"" (edit) → unassigned.
+  const preselected =
+    defaultAssignedTo === undefined ? currentUserId : (defaultAssignedTo ?? "");
+
+  const others = members.filter((m) => m.userId !== currentUserId);
+  const labelFor = (uid: string): string =>
+    uid === currentUserId
+      ? "Tôi phụ trách"
+      : (members.find((m) => m.userId === uid)?.label ?? "Không rõ");
+
+  if (!canAssignOthers) {
+    const display = preselected === "" ? "Chưa phân công" : labelFor(preselected);
+    return (
+      <Field label="Người phụ trách" htmlFor="assigned_to_display">
+        <input type="hidden" name="assigned_to" value={preselected} />
+        <div
+          id="assigned_to_display"
+          className="flex h-11 items-center rounded-lg border border-input bg-muted/40 px-3 text-sm text-muted-foreground"
+        >
+          {display}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Chỉ chủ sở hữu hoặc quản trị viên mới có thể đổi người phụ trách.
+        </p>
+      </Field>
+    );
+  }
+
+  // A historical assignee who is no longer a member: keep the value selectable
+  // so saving the form does not silently unassign them.
+  const knownIds = new Set([currentUserId, ...others.map((m) => m.userId)]);
+  const showLegacy = preselected !== "" && !knownIds.has(preselected);
+
+  return (
+    <Field label="Người phụ trách" htmlFor="assigned_to">
+      <Select
+        id="assigned_to"
+        name="assigned_to"
+        defaultValue={preselected}
+        disabled={disabled}
+      >
+        <option value="">Chưa phân công</option>
+        <option value={currentUserId}>Tôi phụ trách</option>
+        {others.map((m) => (
+          <option key={m.userId} value={m.userId}>
+            {m.label}
+          </option>
+        ))}
+        {showLegacy && (
+          <option value={preselected}>Không rõ (thành viên cũ)</option>
+        )}
+      </Select>
+    </Field>
   );
 }
 

@@ -8,6 +8,7 @@ import { FormError } from "@/components/ui/form-error";
 import { PropertyImageSection } from "@/components/property/property-image-section";
 import { uploadPropertyImagesToR2 } from "@/lib/images/upload-property-images";
 import { PropertyFields, type PropertyFormDefaults } from "../property-form";
+import type { AssigneeContext } from "@/lib/workspace/assignee";
 import { createPropertyWithImages } from "./actions";
 import {
   requestProcessedPropertyImageUpload,
@@ -17,6 +18,7 @@ import {
 type Props = {
   defaultValues?: PropertyFormDefaults;
   submitLabel?: string;
+  assignee?: AssigneeContext;
 };
 
 // ---------------------------------------------------------------------------
@@ -33,6 +35,7 @@ type Props = {
 export function NewPropertyForm({
   defaultValues,
   submitLabel = "Tạo bất động sản",
+  assignee,
 }: Props) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
@@ -108,7 +111,11 @@ export function NewPropertyForm({
     <form ref={formRef} onSubmit={handleSubmit} className="flex flex-col gap-4">
       {error && <FormError>{error}</FormError>}
 
-      <PropertyFields defaultValues={defaultValues} disabled={isPending} />
+      <PropertyFields
+        defaultValues={defaultValues}
+        disabled={isPending}
+        assignee={assignee}
+      />
 
       <PropertyImageSection
         mode="draft"

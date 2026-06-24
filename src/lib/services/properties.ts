@@ -15,7 +15,12 @@
 import "server-only";
 
 import type { RequestContext } from "@/lib/workspace/request-context";
-import { validationError, notFound, internalError } from "@/lib/api/errors";
+import {
+  validationError,
+  forbidden,
+  notFound,
+  internalError,
+} from "@/lib/api/errors";
 import type { LegalStatus, PropertyType, PropertyStatus } from "@/types";
 import {
   parseLooseNumber,
@@ -45,9 +50,17 @@ const VALID_LEGAL_STATUSES = new Set<string>(LEGAL_STATUSES);
 const VALID_SORTS = new Set([
   "newest", "price_asc", "price_desc", "area_asc", "area_desc",
 ]);
+/** Team assignment scopes (Phase 4B). */
+const VALID_SCOPES = new Set([
+  "all", "created_by_me", "assigned_to_me", "unassigned",
+]);
 
-/** Columns returned for list rows (kept lightweight — no heavy text fields). */
-const LIST_COLUMNS = "id,title,district,price,area,status,created_at";
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Columns returned for list rows (kept lightweight — no heavy text fields).
+ *  assigned_to is included so the list can show "Phụ trách: …" (Phase 4B). */
+const LIST_COLUMNS = "id,title,district,price,area,status,created_at,assigned_to";
 /** Full column set for the detail view / API single resource. */
 const DETAIL_COLUMNS =
   "id,user_id,organization_id,created_by,assigned_to,title,property_type,status," +
@@ -70,6 +83,10 @@ export type PropertyListFilters = {
   bedrooms: number | null;
   legal_status: string | null;
   sort: string;
+  /** Team assignment scope: all | created_by_me | assigned_to_me | unassigned. */
+  scope: string;
+  /** Explicit assignee user_id filter (takes precedence over scope). */
+  assigned_to: string | null;
 };
 
 export type PropertyListParams = {
@@ -86,6 +103,7 @@ export type PropertyListItem = {
   area: number | null;
   status: string | null;
   created_at: string;
+  assigned_to: string | null;
 };
 
 export type PropertyListResult = {
@@ -134,6 +152,13 @@ function parseString(raw: string | undefined): string | null {
   return s && s.length > 0 ? s : null;
 }
 
+/** Accept a well-formed UUID only; anything else → null (filter ignored, and
+ *  never passed to a uuid column query where it would raise a DB error). */
+function parseUuid(raw: string | undefined): string | null {
+  const s = raw?.trim();
+  return s && UUID_RE.test(s) ? s : null;
+}
+
 /** Parse + sanitise URL/query params into typed list params. Shared by the web
  *  page and the API route so filter/sort/pagination semantics never drift. */
 export function parsePropertyListParams(sp: RawListParams): PropertyListParams {
@@ -157,6 +182,8 @@ export function parsePropertyListParams(sp: RawListParams): PropertyListParams {
         ? (sp.legal_status ?? null)
         : null,
       sort: VALID_SORTS.has(rawSort) ? rawSort : "newest",
+      scope: VALID_SCOPES.has(sp.scope ?? "") ? (sp.scope as string) : "all",
+      assigned_to: parseUuid(sp.assigned_to),
     },
   };
 }
@@ -179,6 +206,20 @@ export async function listProperties(
     query = query.eq("status", "archived");
   } else {
     query = query.neq("status", "archived");
+  }
+
+  // Team assignment filters (Phase 4B). An explicit assignee id (already
+  // org-scoped + UUID-validated) takes precedence over the coarse scope. All
+  // clauses stay within organization_id, so cross-org ids simply match nothing.
+  if (filters.assigned_to) {
+    query = query.eq("assigned_to", filters.assigned_to);
+  } else {
+    switch (filters.scope) {
+      case "created_by_me": query = query.eq("created_by", ctx.userId); break;
+      case "assigned_to_me": query = query.eq("assigned_to", ctx.userId); break;
+      case "unassigned": query = query.is("assigned_to", null); break;
+      default: break; // "all" → no assignment filter
+    }
   }
 
   if (filters.q) {
@@ -304,6 +345,9 @@ export type PropertyWriteInput = {
   weaknesses?: string | null;
   owner_note?: string | null;
   planning_note?: string | null;
+  /** Phase 4B assignee. Omit (undefined) → keep default/unchanged; "" / null →
+   *  unassigned; a user_id → assign (validated as an active org member). */
+  assigned_to?: string | null;
 };
 
 type ValidatedProperty = {
@@ -416,6 +460,62 @@ export function validatePropertyInput(input: PropertyWriteInput): ValidatedPrope
 }
 
 // ---------------------------------------------------------------------------
+// Assignment resolution (Phase 4B)
+//
+// Permission model (MVP): Owner/Admin may assign to any active member or leave
+// unassigned. A plain Member may only assign to themselves or keep the existing
+// assignee unchanged — never reassign to someone else or unassign. The UI also
+// enforces this, but the service is the real boundary (covers the API too).
+// ---------------------------------------------------------------------------
+async function isActiveMember(
+  ctx: RequestContext,
+  userId: string
+): Promise<boolean> {
+  if (!UUID_RE.test(userId)) return false;
+  const { data, error } = await ctx.supabase
+    .from("organization_members")
+    .select("user_id")
+    .eq("organization_id", ctx.organizationId)
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .maybeSingle();
+  if (error) throw internalError(error.message);
+  return !!data;
+}
+
+/**
+ * Validate + authorise a requested assignee against the caller's role and the
+ * property's current assignee. Returns the value to persist (a user_id or null).
+ * `raw`: "" / null → unassign; a user_id → assign. Throws VALIDATION_ERROR for a
+ * non-member, FORBIDDEN when a member oversteps the MVP rule.
+ */
+async function resolveAssignee(
+  ctx: RequestContext,
+  raw: string | null,
+  current: string | null
+): Promise<string | null> {
+  const canManage = ctx.role === "owner" || ctx.role === "admin";
+  const value = typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+
+  if (value === null) {
+    if (canManage || current === null) return null;
+    throw forbidden("Chỉ chủ sở hữu hoặc quản trị viên mới có thể bỏ phân công.");
+  }
+
+  // Assigning to self is the common path — the authenticated caller already
+  // resolved this workspace, so they are an active member (skip the DB check).
+  if (value === ctx.userId) return value;
+
+  if (!(await isActiveMember(ctx, value))) {
+    throw validationError("Người phụ trách không thuộc nhóm làm việc này.");
+  }
+  // A plain member may keep an existing (other-person) assignee but not set a
+  // new one; managers may assign to any active member.
+  if (canManage || value === current) return value;
+  throw forbidden("Bạn chỉ có thể nhận phụ trách nguồn cho chính mình.");
+}
+
+// ---------------------------------------------------------------------------
 // createProperty — sets user_id + organization_id + created_by + assigned_to
 // ---------------------------------------------------------------------------
 export async function createProperty(
@@ -424,11 +524,18 @@ export async function createProperty(
 ): Promise<{ id: string }> {
   const v = validatePropertyInput(input);
 
+  // Default the assignee to the creator when omitted; otherwise validate the
+  // requested value (current assignee is null for a brand-new property).
+  const assigned_to =
+    input.assigned_to === undefined
+      ? ctx.userId
+      : await resolveAssignee(ctx, input.assigned_to, null);
+
   const insertRow = {
     user_id: ctx.userId, // legacy ownership (kept)
     organization_id: ctx.organizationId,
     created_by: ctx.userId,
-    assigned_to: ctx.userId,
+    assigned_to,
     status: "available" as PropertyStatus,
     ...v,
   };
@@ -455,9 +562,29 @@ export async function updateProperty(
 ): Promise<void> {
   const v = validatePropertyInput(input);
 
+  // Resolve the assignee only when the caller supplied the field. This needs
+  // the current assignee (so a Member may keep an existing assignment) and also
+  // gives an org-scoped existence check before the update runs.
+  const patch: ValidatedProperty & { assigned_to?: string | null } = { ...v };
+  if (input.assigned_to !== undefined) {
+    const { data: cur, error: curErr } = await ctx.supabase
+      .from("properties")
+      .select("assigned_to")
+      .eq("id", propertyId)
+      .eq("organization_id", ctx.organizationId)
+      .maybeSingle();
+    if (curErr) throw internalError(curErr.message);
+    if (!cur) throw notFound("Không tìm thấy bất động sản.");
+    patch.assigned_to = await resolveAssignee(
+      ctx,
+      input.assigned_to,
+      (cur as { assigned_to: string | null }).assigned_to
+    );
+  }
+
   const { data, error } = await ctx.supabase
     .from("properties")
-    .update(v)
+    .update(patch)
     .eq("id", propertyId)
     .eq("organization_id", ctx.organizationId)
     .select("id");

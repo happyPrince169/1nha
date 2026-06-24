@@ -4,6 +4,10 @@ import { notFound } from "next/navigation";
 
 import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { getPropertyById } from "@/lib/services/properties";
+import {
+  listAssignableMembers,
+  memberDisplayLabel,
+} from "@/lib/services/workspace";
 import { listPropertyImages } from "@/lib/services/property-images";
 import { listPropertyGeneratedContents } from "@/lib/services/generated-content";
 import { toApiError } from "@/lib/api/errors";
@@ -81,6 +85,25 @@ export default async function PropertyDetailPage({ params }: Props) {
     limit: 10,
   });
 
+  // Phase 4B: resolve created_by / assigned_to to member labels. A failure must
+  // not break the detail view — fall back to "Không rõ" / "Chưa phân công".
+  let memberLabelMap = new Map<string, string>();
+  try {
+    const members = await listAssignableMembers(ctx);
+    memberLabelMap = new Map(
+      members.map((m) => [m.userId, memberDisplayLabel(m)])
+    );
+  } catch {
+    memberLabelMap = new Map();
+  }
+  const labelForUser = (uid: string | null): string | null => {
+    if (!uid) return null;
+    if (uid === ctx.userId) return "Bạn";
+    return memberLabelMap.get(uid) ?? "Không rõ";
+  };
+  const createdByLabel = labelForUser(property.created_by) ?? "Không rõ";
+  const assignedLabel = labelForUser(property.assigned_to) ?? "Chưa phân công";
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
@@ -145,6 +168,8 @@ export default async function PropertyDetailPage({ params }: Props) {
             <Row label="Đường vào" value={`${property.alley_width} m`} />
           )}
           <Row label="Pháp lý" value={legalStatusLabel(property.legal_status)} />
+          <Row label="Người tạo" value={createdByLabel} />
+          <Row label="Người phụ trách" value={assignedLabel} />
         </CardContent>
       </Card>
 

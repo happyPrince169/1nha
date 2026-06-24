@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { tryGetRequestContext } from "@/lib/workspace/request-context";
 import { toApiError } from "@/lib/api/errors";
 import { getPropertyById } from "@/lib/services/properties";
+import { buildAssigneeContext } from "@/lib/services/workspace";
 import { listPropertyImages } from "@/lib/services/property-images";
 import { updateProperty } from "./actions";
 import { PropertyForm } from "../../property-form";
@@ -40,6 +41,9 @@ export default async function EditPropertyPage({ params }: Props) {
   // controls which row gets updated.
   const boundAction = updateProperty.bind(null, id);
 
+  // Phase 4B: assignee context (members + role) for the "Người phụ trách" field.
+  const assignee = await buildAssigneeContext(ctx);
+
   // Existing images for the live manager (thumbnails; pending rows excluded by
   // the service). A read failure must not break field editing — fall back to []
   // so the manager still lets the user add images.
@@ -72,7 +76,9 @@ export default async function EditPropertyPage({ params }: Props) {
       <PropertyForm
         action={boundAction}
         submitLabel="Lưu thay đổi"
+        assignee={assignee}
         defaultValues={{
+          assigned_to: property.assigned_to,
           title: property.title ?? "",
           property_type: property.property_type ?? "",
           city: property.city ?? "Hà Nội",

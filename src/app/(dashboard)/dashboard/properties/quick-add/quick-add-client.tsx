@@ -14,6 +14,7 @@ import {
 } from "@/lib/images/client-image-processing";
 import { NewPropertyForm } from "../new/new-property-form";
 import type { PropertyFormDefaults } from "../property-form";
+import type { AssigneeContext } from "@/lib/workspace/assignee";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormError } from "@/components/ui/form-error";
@@ -448,10 +449,12 @@ function ReviewStep({
   draft,
   rawText,
   sourceMode,
+  assignee,
 }: {
   draft: NonNullable<QuickAddState["draft"]>;
   rawText: string | null;
   sourceMode: Mode;
+  assignee?: AssigneeContext;
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -475,7 +478,11 @@ function ReviewStep({
           directly to R2. The OCR source image is intentionally NOT carried
           forward as a listing photo (it is often a screenshot of someone
           else's post) — the broker picks their own listing images here. */}
-      <NewPropertyForm defaultValues={draft} submitLabel="Lưu bất động sản" />
+      <NewPropertyForm
+        defaultValues={draft}
+        submitLabel="Lưu bất động sản"
+        assignee={assignee}
+      />
     </div>
   );
 }
@@ -483,7 +490,7 @@ function ReviewStep({
 // ---------------------------------------------------------------------------
 // TextQuickAdd — manages the text extraction sub-flow
 // ---------------------------------------------------------------------------
-function TextQuickAdd() {
+function TextQuickAdd({ assignee }: { assignee?: AssigneeContext }) {
   const [state, formAction, isPending] = useActionState(
     extractPropertyFromTextAction,
     textInitialState
@@ -495,6 +502,7 @@ function TextQuickAdd() {
         draft={state.draft}
         rawText={state.rawText}
         sourceMode="text"
+        assignee={assignee}
       />
     );
   }
@@ -509,7 +517,7 @@ function TextQuickAdd() {
 // ---------------------------------------------------------------------------
 // ImageQuickAdd — manages the image extraction sub-flow
 // ---------------------------------------------------------------------------
-function ImageQuickAdd() {
+function ImageQuickAdd({ assignee }: { assignee?: AssigneeContext }) {
   const [state, formAction, isPending] = useActionState(
     extractPropertyFromImageAction,
     imageInitialState
@@ -521,6 +529,7 @@ function ImageQuickAdd() {
         draft={state.draft}
         rawText={state.rawText}
         sourceMode="image"
+        assignee={assignee}
       />
     );
   }
@@ -537,14 +546,18 @@ function ImageQuickAdd() {
 // ---------------------------------------------------------------------------
 // QuickAddClient — top-level orchestrator with mode switcher
 // ---------------------------------------------------------------------------
-export function QuickAddClient() {
+export function QuickAddClient({ assignee }: { assignee?: AssigneeContext }) {
   const [mode, setMode] = useState<Mode>("text");
 
   return (
     <div className="flex flex-col gap-4">
       <ModeTabs mode={mode} onChange={setMode} />
 
-      {mode === "text" ? <TextQuickAdd /> : <ImageQuickAdd />}
+      {mode === "text" ? (
+        <TextQuickAdd assignee={assignee} />
+      ) : (
+        <ImageQuickAdd assignee={assignee} />
+      )}
     </div>
   );
 }

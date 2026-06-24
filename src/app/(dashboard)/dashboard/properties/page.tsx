@@ -12,6 +12,11 @@ import {
   type PropertyListFilters,
   type PropertyListItem,
 } from "@/lib/services/properties";
+import {
+  listAssignableMembers,
+  memberDisplayLabel,
+} from "@/lib/services/workspace";
+import type { AssigneeOption } from "@/lib/workspace/assignee";
 import { toApiError } from "@/lib/api/errors";
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/utils";
@@ -52,11 +57,26 @@ function buildPageHref(sp: RawParams, page: number): string {
 // ---------------------------------------------------------------------------
 // Build active filter pills for display
 // ---------------------------------------------------------------------------
-function buildActivePills(f: PropertyListFilters): ActiveFilterPill[] {
+const SCOPE_PILL_LABELS: Record<string, string> = {
+  created_by_me: "Nguồn tôi tạo",
+  assigned_to_me: "Tôi phụ trách",
+  unassigned: "Chưa phân công",
+};
+
+function buildActivePills(
+  f: PropertyListFilters,
+  assigneeLabel: (uid: string) => string
+): ActiveFilterPill[] {
   const pills: ActiveFilterPill[] = [];
 
   if (f.q)
     pills.push({ key: "q", label: `"‘${f.q}‘"` });
+
+  // Team assignment (Phase 4B). An explicit assignee filter supersedes scope.
+  if (f.assigned_to)
+    pills.push({ key: "assigned_to", label: `Phụ trách: ${assigneeLabel(f.assigned_to)}` });
+  else if (f.scope && f.scope !== "all")
+    pills.push({ key: "scope", label: SCOPE_PILL_LABELS[f.scope] ?? f.scope });
   if (f.property_type)
     pills.push({ key: "property_type", label: PROPERTY_TYPE_LABELS[f.property_type] ?? f.property_type });
   if (f.legal_status)
@@ -108,6 +128,8 @@ type RawParams = {
   legal_status?: string;
   sort?: string;
   page?: string;
+  scope?: string;
+  assigned_to?: string;
 };
 
 type Props = {
@@ -118,12 +140,32 @@ export default async function PropertiesPage({ searchParams }: Props) {
   const sp = await searchParams;
   const params = parsePropertyListParams(sp);
   const { filters, showArchived, page } = params;
-  const activePills = buildActivePills(filters);
-  const hasActiveFilters = activePills.length > 0;
 
   // Authenticated, workspace-scoped context (proxy already gates /dashboard).
   const ctx = await tryGetRequestContext();
   if (!ctx) return null;
+
+  // Phase 4B: active workspace members → label map for assignment display +
+  // the filter member select. A failure here must not break the list.
+  let memberOptions: AssigneeOption[] = [];
+  try {
+    memberOptions = (await listAssignableMembers(ctx)).map((m) => ({
+      userId: m.userId,
+      label: memberDisplayLabel(m),
+      role: m.role,
+    }));
+  } catch {
+    memberOptions = [];
+  }
+  const memberLabelMap = new Map(memberOptions.map((m) => [m.userId, m.label]));
+  const assigneeLabel = (uid: string | null): string => {
+    if (!uid) return "Chưa phân công";
+    if (uid === ctx.userId) return "Bạn";
+    return memberLabelMap.get(uid) ?? "Không rõ";
+  };
+
+  const activePills = buildActivePills(filters, (uid) => assigneeLabel(uid));
+  const hasActiveFilters = activePills.length > 0;
 
   // Property list comes from the shared service: organization-scoped, paginated
   // (PAGE_SIZE + 1 → hasNextPage), filters/search/sort preserved.
@@ -240,7 +282,11 @@ export default async function PropertiesPage({ searchParams }: Props) {
       </div>
 
       {/* Filters */}
-      <PropertyFilters activeFilters={activePills} basePath={basePath} />
+      <PropertyFilters
+        activeFilters={activePills}
+        basePath={basePath}
+        members={memberOptions}
+      />
 
       {/* Query error */}
       {errorMsg && (
@@ -333,6 +379,7 @@ export default async function PropertiesPage({ searchParams }: Props) {
             area={p.area}
             status={p.status}
             thumbnailUrl={thumbnailMap.get(p.id) ?? null}
+            assignedLabel={assigneeLabel(p.assigned_to)}
           />
         ))}
       </div>
@@ -394,6 +441,7 @@ type PropertyCardProps = {
   area: number | null;
   status: string | null;
   thumbnailUrl: string | null;
+  assignedLabel: string;
 };
 
 function PropertyCard({
@@ -404,6 +452,7 @@ function PropertyCard({
   area,
   status,
   thumbnailUrl,
+  assignedLabel,
 }: PropertyCardProps) {
   return (
     <Link href={`/dashboard/properties/${id}`} className="block">
@@ -444,6 +493,9 @@ function PropertyCard({
                   {district}
                 </p>
               )}
+              <p className="truncate text-xs text-muted-foreground">
+                Phụ trách: <span className="font-medium text-foreground">{assignedLabel}</span>
+              </p>
               <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
                 <span>
                   <span className="text-muted-foreground">Giá: </span>

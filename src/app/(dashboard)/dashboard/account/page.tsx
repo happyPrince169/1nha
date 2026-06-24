@@ -134,6 +134,21 @@ export default async function AccountPage() {
 
       <Separator />
 
+      {/* Không gian làm việc */}
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide px-1">
+          Không gian làm việc
+        </p>
+        <AccountLinkCard
+          icon="🏢"
+          label="Quản lý workspace"
+          description="Quản lý team, thành viên và quyền truy cập nguồn hàng."
+          href="/dashboard/account/workspace"
+        />
+      </div>
+
+      <Separator />
+
       {/* Liên hệ & góp ý */}
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-0.5 px-1">

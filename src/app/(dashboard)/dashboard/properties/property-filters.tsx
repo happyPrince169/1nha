@@ -3,6 +3,15 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useTransition, useState, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import type { AssigneeOption } from "@/lib/workspace/assignee";
+
+// Team assignment scope options (Phase 4B).
+export const SCOPE_LABELS: Record<string, string> = {
+  all: "Tất cả nguồn",
+  created_by_me: "Nguồn tôi tạo",
+  assigned_to_me: "Tôi phụ trách",
+  unassigned: "Chưa phân công",
+};
 
 // ---------------------------------------------------------------------------
 // Label maps (shared with server page for display)
@@ -67,9 +76,11 @@ type Props = {
   activeFilters: ActiveFilterPill[];
   /** Base path to preserve archived tab state */
   basePath: string;
+  /** Active workspace members for the assignee filter (Phase 4B). */
+  members: AssigneeOption[];
 };
 
-export function PropertyFilters({ activeFilters, basePath }: Props) {
+export function PropertyFilters({ activeFilters, basePath, members }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -142,6 +153,8 @@ export function PropertyFilters({ activeFilters, basePath }: Props) {
   const currentBedrooms = searchParams.get("bedrooms") ?? "";
   const currentLegal = searchParams.get("legal_status") ?? "";
   const currentSort = searchParams.get("sort") ?? "newest";
+  const currentScope = searchParams.get("scope") ?? "all";
+  const currentAssigned = searchParams.get("assigned_to") ?? "";
 
   const hasActiveFilters = activeFilters.length > 0;
 
@@ -219,6 +232,44 @@ export function PropertyFilters({ activeFilters, basePath }: Props) {
           id="property-filter-panel"
           className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
         >
+          {/* Phân công (Phase 4B) — scope + optional specific member */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor="pf-scope" className={FILTER_LABEL_CLASS}>
+              Phân công
+            </label>
+            <select
+              id="pf-scope"
+              value={currentScope}
+              onChange={(e) => navigate({ scope: e.target.value, assigned_to: "" })}
+              className={FILTER_SELECT_CLASS}
+            >
+              {Object.entries(SCOPE_LABELS).map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </select>
+          </div>
+
+          {members.length > 1 && (
+            <div className="flex flex-col gap-1">
+              <label htmlFor="pf-assigned" className={FILTER_LABEL_CLASS}>
+                Người phụ trách
+              </label>
+              <select
+                id="pf-assigned"
+                value={currentAssigned}
+                onChange={(e) =>
+                  navigate({ assigned_to: e.target.value, scope: "" })
+                }
+                className={FILTER_SELECT_CLASS}
+              >
+                <option value="">Tất cả thành viên</option>
+                {members.map((m) => (
+                  <option key={m.userId} value={m.userId}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Sort */}
           <div className="flex flex-col gap-1">
             <label htmlFor="pf-sort" className={FILTER_LABEL_CLASS}>

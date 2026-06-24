@@ -837,6 +837,101 @@ scheduled/posted); the token is never printed; only the anon key is used. See
 roles). Vietnam SMS OTP provider stays paused; social OAuth still not needed; no
 auto-posting.
 
+### Team / Workspace UI (Phase 4A)
+
+First Team UI on top of the Phase 2A org foundation. No change to existing
+tables or RLS policies; one additive migration
+(`20240111000001_organization_invites.sql`). Entry point is a **"Không gian làm
+việc"** card under Account → `/dashboard/account/workspace` (no new bottom-nav
+tab — secondary features stay inside the 5 main tabs).
+
+**Workspace page** (`getCurrentWorkspaceDetails` / `listOrganizationMembers` /
+`listOrganizationInvites` in `src/lib/services/workspace.ts`):
+
+- Overview: workspace name, type (Cá nhân/Nhóm/Công ty), current user role,
+  active member count, created date.
+- **Rename** (owner/admin only): updates `organizations.name`; RLS
+  `organizations_update_manager` (Phase 2A) is the backstop — no new policy.
+- **Members list**: id/role/status/joined plus email + display_name + phone.
+  Other users' email (auth.users) and profile (user_profiles) are RLS-hidden, so
+  the roster comes from `list_organization_members(org_id)` — a SECURITY DEFINER
+  RPC gated on `is_organization_member`. Role labels: owner=Chủ sở hữu,
+  admin=Quản trị, member=Thành viên.
+- **Invite by link** (owner/admin): email + role (member/admin, default member).
+  No email is sent — `createOrganizationInvite` returns an unguessable token and
+  the client builds a `/invite/<token>` link to copy and forward (Zalo/email).
+  Pending invites can be copied again or revoked.
+
+**Invite storage + accept** (`organization_invites`):
+
+```text
+id, organization_id, email, role(admin|member), token(unique),
+invited_by, status(pending|accepted|revoked|expired), expires_at(+7d),
+created_at, accepted_at, accepted_by
+```
+
+- RLS: managers (`can_manage_organization`) select/insert/update their org's
+  invites. Token-based preview/accept do NOT go through table RLS — they use
+  gated SECURITY DEFINER RPCs so a not-yet-member holding the token can act on
+  exactly one invite without seeing the table.
+- `/invite/[token]` page (outside the dashboard layout, NOT matched by
+  `src/proxy.ts`): signed-out → sign-in CTA (link stays valid to reopen);
+  signed-in → `get_organization_invite(token)` preview, then
+  `accept_organization_invite(token)` which is the **single controlled
+  membership write** (mirrors Phase 2A `ensure_personal_organization`). It adds
+  the caller with the invited role, enforces email match for email accounts
+  (phone-only accounts accept on the token alone), can never grant `owner`, and
+  never downgrades an existing member. On success → workspace page.
+
+**Permissions:** owner/admin can view + rename + invite + revoke; member can
+view only (rename is read-only, invite card explains the restriction). No
+service-role key anywhere.
+
+**Deferred to 4A.2:** change member role / remove member (no member
+UPDATE/DELETE policy yet — the page shows a note); `?next=` redirect after
+sign-in for the signed-out invite path; workspace switcher; real email delivery.
+
+### Property team assignment (Phase 4B)
+
+Activates the Phase 2A `properties.created_by` / `properties.assigned_to`
+columns in the UI — no schema or RLS change. Org scoping is unchanged: every
+active member sees the full workspace inventory.
+
+**Assignee context.** `buildAssigneeContext(ctx)` / `listAssignableMembers(ctx)`
+(workspace service) reuse the gated `list_organization_members` RPC to return
+active members with resolved labels (display name → email → phone). The
+serializable `AssigneeContext` (`src/lib/workspace/assignee.ts`, a non-server
+module so client components can import the type) carries `{ currentUserId,
+canAssignOthers, members[] }` down to the property form.
+
+**Form field "Người phụ trách"** lives in the shared `PropertyFields`, so it
+appears identically in manual create, quick-add review, and edit. Owner/Admin
+get an editable select (Chưa phân công + Tôi phụ trách + each member); a Member
+gets a read-only display + hidden input (cannot reassign). A historical
+ex-member assignee stays selectable so saving never silently unassigns.
+
+**Service validation (the real boundary — covers `/api/properties` too).**
+`createProperty` defaults `assigned_to` to the creator when omitted;
+`updateProperty` resolves it only when supplied (reads the current assignee
+first). `resolveAssignee` enforces: the target must be an active org member
+(`isActiveMember`, else VALIDATION_ERROR); Owner/Admin may set anyone or null;
+a Member may only set themselves or keep the current value (else FORBIDDEN).
+
+**List + detail.** `LIST_COLUMNS` and `PropertyListItem` gained `assigned_to`;
+cards show "Phụ trách: Bạn / <tên> / Chưa phân công"; the detail page adds
+"Người tạo" + "Người phụ trách". Ids resolve to labels via the roster
+(self → "Bạn", null → "Chưa phân công", ex-member → "Không rõ"). created_by is
+shown only on detail to keep cards uncluttered.
+
+**Filters.** `parsePropertyListParams` + `listProperties` gained `scope`
+(`all` | `created_by_me` | `assigned_to_me` | `unassigned`) and `assigned_to`
+(UUID-validated; an explicit member id supersedes scope). All clauses stay
+within `organization_id`, COUNT-free pagination (PAGE_SIZE + 1) is preserved,
+and a malformed `assigned_to` is ignored rather than crashing.
+
+**Deferred to 4C:** deeper per-property access control, a Member reassigning a
+colleague's source, member role changes/removal, workspace switcher.
+
 ### API authentication contract (Phase 3A.1)
 
 `getRequestContext()` authenticates from **two** sources, both validated

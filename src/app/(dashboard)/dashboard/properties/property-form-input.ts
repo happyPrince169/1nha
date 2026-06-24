@@ -9,7 +9,12 @@ export function propertyFormToInput(formData: FormData): PropertyWriteInput {
     const v = formData.get(key);
     return typeof v === "string" ? v : null;
   };
+  // Phase 4B assignee: present field (even empty "" = unassigned) → keep its
+  // value; absent → undefined so the service applies its default/unchanged rule.
+  const assignedRaw = formData.get("assigned_to");
+
   return {
+    assigned_to: typeof assignedRaw === "string" ? assignedRaw : undefined,
     title: s("title"),
     property_type: s("property_type"),
     city: s("city"),

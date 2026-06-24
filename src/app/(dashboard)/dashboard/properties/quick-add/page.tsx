@@ -2,12 +2,17 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { QuickAddClient } from "./quick-add-client";
+import { tryGetRequestContext } from "@/lib/workspace/request-context";
+import { buildAssigneeContext } from "@/lib/services/workspace";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Nhập nhanh nguồn hàng" };
 
-export default function QuickAddPage() {
+export default async function QuickAddPage() {
+  const ctx = await tryGetRequestContext();
+  const assignee = ctx ? await buildAssigneeContext(ctx) : undefined;
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-3">
@@ -27,7 +32,7 @@ export default function QuickAddPage() {
         </Link>
       </div>
 
-      <QuickAddClient />
+      <QuickAddClient assignee={assignee} />
 
       <p className="rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground leading-relaxed">
         📌 Vui lòng kiểm tra lại giá, diện tích, pháp lý và trạng thái căn trước khi lưu.

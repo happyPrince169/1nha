@@ -422,6 +422,76 @@ Vietnam SMS OTP provider stays paused; social OAuth still not needed.
 - Filters: team sources / my sources / assigned to me
 ```
 
+#### Phase 4A — Workspace UI (🟢 DONE)
+
+First Team/Workspace UI on top of the Phase 2A org foundation. No schema change
+to existing tables; one additive migration for invites.
+
+```text
+- Account → "Không gian làm việc" card → /dashboard/account/workspace
+- Workspace page: name, type, role, member count, created date
+- Rename workspace (owner/admin) — RLS organizations_update_manager backstop
+- Members list with email / phone / role / joined date (vi role labels)
+- Invite by LINK (owner/admin): email + role (member/admin), copy /invite/<token>
+- Pending invites list: copy link + revoke
+- Accept flow: /invite/[token] → accept_organization_invite RPC → workspace page
+- Roles: owner=Chủ sở hữu, admin=Quản trị, member=Thành viên
+```
+
+New migration `20240111000001_organization_invites.sql`:
+
+- `organization_invites` table (org-scoped, RLS: managers select/insert/update).
+- `list_organization_members(org_id)` SECURITY DEFINER — exposes fellow members'
+  email/phone (auth.users + user_profiles otherwise RLS-hidden), gated on
+  `is_organization_member`.
+- `get_organization_invite(token)` / `accept_organization_invite(token)`
+  SECURITY DEFINER — token-based preview + the single controlled membership
+  write (no broad INSERT policy on organization_members). An invite can never
+  grant `owner`; existing members are never silently downgraded.
+
+No service-role key anywhere. No email is sent — invites are shareable links the
+broker forwards via Zalo/email.
+
+**Deferred to 4A.2:** change member role, remove member (no member UPDATE/DELETE
+policy added yet — page shows a note); honoring `?next=` after sign-in for the
+signed-out invite path (today the invite page shows a sign-in CTA and the link
+stays valid to reopen); workspace switcher / multi-workspace; real email
+delivery.
+
+#### Phase 4B — Property team assignment (🟢 DONE)
+
+Makes property/source management team-aware in the UI. No schema change — Phase
+2A already added `properties.created_by` / `properties.assigned_to`; this phase
+activates them in the UI, validation, and filtering.
+
+```text
+- "Người phụ trách" field on every property form (manual, quick-add, edit)
+- Detail page shows "Người tạo" + "Người phụ trách"
+- Inventory cards show "Phụ trách: Bạn / <tên> / Chưa phân công"
+- Filters: Tất cả nguồn / Nguồn tôi tạo / Tôi phụ trách / Chưa phân công + by member
+- URL params: scope=all|created_by_me|assigned_to_me|unassigned, assigned_to=<id>
+```
+
+Assignment defaults to the creator on create. Validation + permission live in
+the properties service (the security boundary, covers the API too):
+
+- `assigned_to` must be an active member of the current org (else
+  VALIDATION_ERROR); cross-org / arbitrary ids are rejected.
+- **Owner/Admin** may assign to anyone or leave unassigned.
+- **Member** may only assign to themselves or keep an existing assignee
+  unchanged (else FORBIDDEN). The form renders read-only for members.
+
+Member options come from `buildAssigneeContext` / `listAssignableMembers`
+(workspace service), which reuse the Phase 4A gated `list_organization_members`
+RPC — no service-role, no cross-org exposure. List/detail resolve ids → labels
+via the same roster (null → "Chưa phân công", self → "Bạn", ex-member →
+"Không rõ").
+
+**Visibility model:** all active members see the full workspace inventory (org
+scoping unchanged). **Deferred to 4C:** deeper per-property access control,
+member role changes/removal, workspace switcher, reassigning a colleague's
+source as a plain member.
+
 ### Phase 5 — Mobile app skeleton (Expo React Native, later)
 
 ```text
