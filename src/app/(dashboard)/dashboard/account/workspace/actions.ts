@@ -92,3 +92,46 @@ export async function revokeInviteAction(
     return { error: toApiError(err).message };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Member management (Phase 4D) — owner-only role change + soft removal
+// ---------------------------------------------------------------------------
+export type MemberActionState = {
+  error: string | null;
+  success: string | null;
+};
+
+export async function updateMemberRoleAction(
+  _prev: MemberActionState,
+  formData: FormData
+): Promise<MemberActionState> {
+  try {
+    const ctx = await getRequestContext();
+    await workspace.updateOrganizationMemberRole(
+      ctx,
+      (formData.get("member_id") as string | null) ?? "",
+      (formData.get("role") as string | null) ?? ""
+    );
+    revalidatePath(WORKSPACE_PATH);
+    return { error: null, success: "Đã cập nhật vai trò thành viên." };
+  } catch (err) {
+    return { error: toApiError(err).message, success: null };
+  }
+}
+
+export async function removeMemberAction(
+  _prev: MemberActionState,
+  formData: FormData
+): Promise<MemberActionState> {
+  try {
+    const ctx = await getRequestContext();
+    await workspace.removeOrganizationMember(
+      ctx,
+      (formData.get("member_id") as string | null) ?? ""
+    );
+    revalidatePath(WORKSPACE_PATH);
+    return { error: null, success: "Đã xoá thành viên khỏi workspace." };
+  } catch (err) {
+    return { error: toApiError(err).message, success: null };
+  }
+}

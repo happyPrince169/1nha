@@ -1,3 +1,4 @@
+
 # 1nha Architecture
 
 ## Product Overview
@@ -901,8 +902,7 @@ active member sees the full workspace inventory.
 (workspace service) reuse the gated `list_organization_members` RPC to return
 active members with resolved labels (display name → email → phone). The
 serializable `AssigneeContext` (`src/lib/workspace/assignee.ts`, a non-server
-module so client components can import the type) carries `{ currentUserId,
-canAssignOthers, members[] }` down to the property form.
+module so client components can import the type) carries `{ currentUserId, canAssignOthers, members[] }` down to the property form.
 
 **Form field "Người phụ trách"** lives in the shared `PropertyFields`, so it
 appears identically in manual create, quick-add review, and edit. Owner/Admin
@@ -987,6 +987,79 @@ every policy (properties, images-via-parent, content) — higher risk, deferred.
 UPDATE/DELETE policy yet); DB-level per-property RLS; per-property ACL tables;
 workspace switcher; real email invite; audit log.
 
+### RLS hardening + member management (Phase 4D)
+
+Makes RLS a **defensive backstop** for the Phase 4C model (the service layer
+stays primary) and adds owner-driven member management. One migration:
+`20240112000001_phase4d_rls_member_management.sql`.
+
+**Row-manage helpers** (no policy recursion — they delegate to the Phase 2A
+membership definers `is_organization_member` / `can_manage_organization`, which
+already bypass RLS):
+
+- `can_manage_property_row(org, created_by, assigned_to)` — pure predicate: true
+  for Owner/Admin, or an active member who created / is assigned the row.
+- `can_manage_property(property_id)` — **SECURITY DEFINER** (reads
+  `public.properties` directly, never the child table that calls it → no
+  recursion). Used by `property_images` + `generated_contents` policies.
+- `can_manage_generated_content(org, property_id, created_by)` — parent-property
+  rule, with an orphan fallback (no `property_id` → Owner/Admin or the creator).
+
+**Policy split.** The broad Phase 2A `*_member_all` (FOR ALL) policies on
+`properties` / `property_images` / `generated_contents` / `content_style_profiles`
+are dropped and replaced with:
+
+```text
+SELECT  -> every active org member (visibility stays org-wide)
+INSERT  -> active member (content: must manage the parent property)
+UPDATE  -> Owner/Admin, or the row's creator/assignee (property-derived)
+DELETE  -> same management rule
+style profiles UPDATE/DELETE -> Owner/Admin (creator covered by the kept own-policy)
+```
+
+The Phase 2A FOR-ALL `user_id` policies (`*_own_user`, `*_*_own`) are **replaced
+by a SELECT-only `*_select_own` net**. Their old `WITH CHECK` was just
+`user_id = auth.uid()` (no `organization_id`), so a member could INSERT a row into
+ANOTHER org by setting `organization_id` explicitly — the write side is dropped;
+INSERT/UPDATE/DELETE now always require org membership + the manage rule. The
+kept SELECT-only net only ever surfaces a user's own rows (cannot leak) and
+prevents a read lockout on any legacy null-`organization_id` row.
+
+**Service-vs-RLS nuances (service is authoritative; documented intentionally):**
+
+- A Member reassigning `assigned_to` to *another* user is blocked by the service
+  (`resolveAssignee`), not RLS (the WITH CHECK passes because `created_by=self`).
+- INSERT assignee validation stays in the service (RLS only checks membership).
+- `generated_contents` orphan rows (no `property_id`) — historical only; the app
+  always sets `property_id`. Such a row is manageable by Owner/Admin or its
+  creator (`created_by`) via `can_manage_generated_content`.
+- **CAVEAT:** the base `properties` / `generated_contents` tables were created in
+  the Supabase dashboard and may carry dashboard-authored policies this migration
+  cannot drop by name. Audit `pg_policies` after deploy (query in the migration
+  header) and drop any leftover broad / write-enabling user_id FOR-ALL policy.
+
+**Member management.** `organization_members` still has no broad write policy;
+role changes + removals flow through two **owner-gated SECURITY DEFINER RPCs**
+(the single controlled membership write, mirroring `accept_organization_invite`):
+
+- `update_organization_member_role(member_id, 'admin'|'member')` — owner-only;
+  refuses to touch an `owner` row (owner transfer deferred → also blocks
+  last-owner demotion); can never grant `owner`.
+- `remove_organization_member(member_id)` — owner-only soft remove
+  (`status='removed'`, so `is_organization_member` / `resolveWorkspaceForUser`
+  stop seeing them); refuses to remove the last active owner.
+
+Service: `workspace.updateOrganizationMemberRole` / `removeOrganizationMember`
+(re-check Owner up front, map RPC exceptions → ApiError). Style profiles gained a
+`requireManageableProfileInOrg` guard (creator OR Owner/Admin) on
+update/delete/setDefault. UI: `members-section.tsx` gives the Owner a per-member
+role select + remove (owner rows protected, last owner cannot be removed); Admin
+and Member see a read-only roster. A removed member's assigned properties are
+**not** auto-reassigned (manual, as in Phase 4B).
+
+**Deferred past 4D:** workspace switcher; per-property ACL tables; audit log;
+real email delivery; owner-transfer flow; member-management JSON API routes.
+
 ### API authentication contract (Phase 3A.1)
 
 `getRequestContext()` authenticates from **two** sources, both validated
@@ -1003,10 +1076,10 @@ server-side via `supabase.auth.getUser()` (never a local JWT decode):
   - Header **present but malformed** (wrong scheme, empty, or no token) →
     `UNAUTHORIZED` immediately — it does **NOT** fall back to cookies.
   - `Bearer <invalid/expired token>` → `UNAUTHORIZED` (rejected by `getUser()`).
-  Cookie fallback happens **only** when the Authorization header is absent.
-  The header is read via `next/headers`, so the helper keeps a stable signature
-  across route handlers, Server Components, and Server Actions (no `NextRequest`
-  threading).
+    Cookie fallback happens **only** when the Authorization header is absent.
+    The header is read via `next/headers`, so the helper keeps a stable signature
+    across route handlers, Server Components, and Server Actions (no `NextRequest`
+    threading).
 - The Bearer path uses `createBearerClient(token)` (`src/lib/supabase/server.ts`):
   the public **anon** key with the token as a global `Authorization` header, so
   both auth validation and every DB/Storage call run AS that user — RLS-scoped

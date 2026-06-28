@@ -538,6 +538,51 @@ deferred (would need role lookups + parent-property joins in every policy).
 write policy yet); DB-level (RLS) per-property permissions; per-property ACL
 tables; workspace switcher; real email invite; audit log.
 
+#### Phase 4D — RLS hardening + member management cleanup (🟢 DONE)
+
+Makes RLS a **defensive backstop** for the MVP permission model (the service
+layer stays the primary boundary) and adds owner-driven member management.
+
+Migration `20240112000001_phase4d_rls_member_management.sql`:
+
+```text
+Helpers (no policy recursion; delegate to the 2A membership definers):
+  can_manage_property_row(org, created_by, assigned_to)  -- pure predicate
+  can_manage_property(property_id)                       -- SECURITY DEFINER
+  can_manage_generated_content(org, property_id, created_by)
+
+Policies (the broad 2A *_member_all FOR ALL policies are dropped + split):
+  properties / generated_contents / content_style_profiles / property_images
+    SELECT  -> every active org member (visibility stays org-wide)
+    INSERT  -> active member (content: must manage the parent property)
+    UPDATE  -> Owner/Admin, or the row's creator/assignee (property-derived)
+    DELETE  -> same management rule
+  The Phase 2A FOR-ALL user_id policies are replaced by a SELECT-only user_id
+  net (their WITH CHECK omitted organization_id → allowed cross-org INSERTs);
+  writes now ALWAYS require org membership + the manage rule.
+
+Member management (owner-gated SECURITY DEFINER RPCs — the only membership write):
+  update_organization_member_role(member_id, 'admin'|'member')
+  remove_organization_member(member_id)   -- soft remove (status='removed')
+  Cannot grant owner, demote/remove the last owner, or be called by non-owners.
+```
+
+Service: `workspace.updateOrganizationMemberRole` / `removeOrganizationMember`
+(Owner-only); style-profiles update/delete/setDefault now gated to creator OR
+Owner/Admin (`requireManageableProfileInOrg`). UI: `members-section.tsx` gives
+the Owner a per-member role select + remove (owner rows protected); Admin/Member
+see a read-only roster.
+
+**Known service-vs-RLS nuance (documented, service is authoritative):** a Member
+reassigning `assigned_to` to *another* user is blocked by the service
+(`resolveAssignee`), not by RLS (the new row still satisfies `created_by=self`);
+INSERT assignee validation likewise stays service-side. The base `properties` /
+`generated_contents` tables were dashboard-created, so any leftover dashboard RLS
+policy must be audited post-deploy (`pg_policies` query in the migration header).
+
+**Deferred past 4D:** workspace switcher; per-property ACL tables; audit log;
+real email delivery; owner-transfer flow; member-management JSON API routes.
+
 ### Phase 5 — Mobile app skeleton (Expo React Native, later)
 
 ```text

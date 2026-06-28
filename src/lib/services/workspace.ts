@@ -100,6 +100,12 @@ function requireManager(ctx: RequestContext): void {
   }
 }
 
+function requireOwner(ctx: RequestContext): void {
+  if (ctx.role !== "owner") {
+    throw forbidden("Bạn không có quyền thay đổi thành viên.");
+  }
+}
+
 function normaliseRole(value: unknown): WorkspaceRole {
   const role = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (!INVITABLE_ROLES.has(role)) {
@@ -342,6 +348,71 @@ export async function revokeOrganizationInvite(
   if (!data) throw notFound("Không tìm thấy lời mời cần thu hồi.");
 
   return { id: data.id };
+}
+
+// ---------------------------------------------------------------------------
+// Member management (Phase 4D) — owner-only role change + soft removal.
+//
+// The actual write happens in the owner-gated SECURITY DEFINER RPCs
+// (update_organization_member_role / remove_organization_member). The service
+// re-checks the caller is an Owner up front for a friendly error before the RPC
+// round-trip, and maps the RPC's Postgres exceptions to ApiError.
+// ---------------------------------------------------------------------------
+/** Map the Postgres exceptions raised by the member-management RPCs to ApiError. */
+function mapMemberError(message: string): never {
+  const m = message.toLowerCase();
+  if (m.includes("member_unauthenticated")) {
+    throw forbidden("Bạn cần đăng nhập để thực hiện thao tác này.");
+  }
+  if (m.includes("member_forbidden")) {
+    throw forbidden("Bạn không có quyền thay đổi thành viên.");
+  }
+  if (m.includes("member_role_invalid")) {
+    throw validationError("Vai trò không hợp lệ. Chọn Quản trị hoặc Thành viên.");
+  }
+  if (m.includes("member_not_found")) {
+    throw notFound("Không tìm thấy thành viên.");
+  }
+  if (m.includes("member_owner_protected")) {
+    throw forbidden("Không thể thay đổi vai trò của chủ sở hữu.");
+  }
+  if (m.includes("member_last_owner")) {
+    throw validationError("Không thể xoá chủ sở hữu cuối cùng.");
+  }
+  throw internalError(message);
+}
+
+export async function updateOrganizationMemberRole(
+  ctx: RequestContext,
+  memberId: string,
+  role: string
+): Promise<{ id: string; role: WorkspaceRole }> {
+  requireOwner(ctx);
+  assertUuid(memberId, "Mã thành viên");
+  const nextRole = normaliseRole(role); // admin | member only
+
+  const { error } = await ctx.supabase.rpc("update_organization_member_role", {
+    p_member_id: memberId,
+    p_role: nextRole,
+  });
+
+  if (error) mapMemberError(error.message);
+  return { id: memberId, role: nextRole };
+}
+
+export async function removeOrganizationMember(
+  ctx: RequestContext,
+  memberId: string
+): Promise<{ id: string }> {
+  requireOwner(ctx);
+  assertUuid(memberId, "Mã thành viên");
+
+  const { error } = await ctx.supabase.rpc("remove_organization_member", {
+    p_member_id: memberId,
+  });
+
+  if (error) mapMemberError(error.message);
+  return { id: memberId };
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ import { Separator } from "@/components/ui/separator";
 import { roleLabel, workspaceTypeLabel } from "./labels";
 import { WorkspaceNameForm } from "./workspace-name-form";
 import { InviteSection, type InviteRow } from "./invite-section";
+import { MembersSection, type MemberItem } from "./members-section";
 
 export const metadata: Metadata = { title: "Không gian làm việc" };
 
@@ -36,12 +37,23 @@ export default async function WorkspacePage() {
   ]);
 
   const canManage = details.canManage;
+  // Member role change / removal is Owner-only (Phase 4D); the RPC enforces it
+  // server-side too. Admins keep invite management but not member management.
+  const canManageMembers = details.role === "owner";
   const inviteRows: InviteRow[] = invites.map((i) => ({
     id: i.id,
     email: i.email,
     role: i.role,
     token: i.token,
     expiresAt: i.expiresAt,
+  }));
+  const memberItems: MemberItem[] = members.map((m) => ({
+    id: m.id,
+    role: m.role,
+    displayName: m.displayName,
+    email: m.email,
+    phone: m.phone,
+    isSelf: m.isSelf,
   }));
 
   return (
@@ -122,46 +134,13 @@ export default async function WorkspacePage() {
             Thành viên ({members.length})
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <ul className="flex flex-col gap-2">
-            {members.map((member) => {
-              const primary =
-                member.displayName ?? member.email ?? "Thành viên";
-              const secondary =
-                member.displayName && member.email ? member.email : member.phone;
-              return (
-                <li
-                  key={member.id}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5"
-                >
-                  <div
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-sm font-semibold uppercase"
-                    aria-hidden
-                  >
-                    {primary.slice(0, 1)}
-                  </div>
-                  <div className="flex flex-col gap-0.5 min-w-0">
-                    <span className="text-sm font-medium leading-tight truncate">
-                      {primary}
-                      {member.isSelf && (
-                        <span className="ml-1 text-xs text-muted-foreground">
-                          (Bạn)
-                        </span>
-                      )}
-                    </span>
-                    {secondary && (
-                      <span className="text-xs text-muted-foreground truncate">
-                        {secondary}
-                      </span>
-                    )}
-                  </div>
-                  <Badge variant="outline" className="ml-auto shrink-0">
-                    {roleLabel(member.role)}
-                  </Badge>
-                </li>
-              );
-            })}
-          </ul>
+        <CardContent className="flex flex-col gap-2">
+          <MembersSection members={memberItems} canManage={canManageMembers} />
+          {!canManageMembers && (
+            <p className="px-1 text-xs text-muted-foreground leading-snug">
+              Chỉ chủ sở hữu mới có thể đổi vai trò hoặc xoá thành viên.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -181,10 +160,6 @@ export default async function WorkspacePage() {
           )}
         </CardContent>
       </Card>
-
-      <p className="px-1 text-xs text-muted-foreground leading-snug">
-        Việc đổi vai trò và xoá thành viên sẽ được mở ở bước tiếp theo (4A.2).
-      </p>
     </div>
   );
 }

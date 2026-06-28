@@ -21,7 +21,12 @@
 import "server-only";
 
 import type { RequestContext } from "@/lib/workspace/request-context";
-import { validationError, notFound, internalError } from "@/lib/api/errors";
+import {
+  validationError,
+  forbidden,
+  notFound,
+  internalError,
+} from "@/lib/api/errors";
 import { trackEvent } from "@/lib/usage";
 import { analyzeContentStyle } from "@/lib/ai/analyze-content-style";
 import type { ContentStyleRules } from "@/types";
@@ -181,6 +186,27 @@ async function requireProfileInOrg(
   return data as unknown as DetailDbRow;
 }
 
+/**
+ * Mutation guard (Phase 4D): a style profile may be edited / deleted / set as
+ * default by Owner/Admin (any org profile) or by its own creator. Throws
+ * NOT_FOUND across orgs / missing, FORBIDDEN when a plain member touches another
+ * member's profile. RLS backs the same rule (manager OR user_id = creator).
+ */
+async function requireManageableProfileInOrg(
+  ctx: RequestContext,
+  styleProfileId: string
+): Promise<void> {
+  const row = await requireProfileInOrg(ctx, styleProfileId, "id, created_by");
+  const createdBy = (row as unknown as { created_by: string | null }).created_by;
+  const canManage =
+    ctx.role === "owner" || ctx.role === "admin" || createdBy === ctx.userId;
+  if (!canManage) {
+    throw forbidden(
+      "Bạn không có quyền chỉnh sửa văn phong này. Chỉ người tạo hoặc quản trị viên mới có thể thực hiện."
+    );
+  }
+}
+
 /** Clear the current default across the organization (at most one per org). */
 async function clearOrganizationDefault(ctx: RequestContext): Promise<void> {
   const { error } = await ctx.supabase
@@ -331,7 +357,7 @@ export async function updateStyleProfile(
   styleProfileId: string,
   input: UpdateStyleProfileInput
 ): Promise<StyleProfileDetail> {
-  await requireProfileInOrg(ctx, styleProfileId, "id");
+  await requireManageableProfileInOrg(ctx, styleProfileId);
 
   const patch: {
     name?: string;
@@ -381,7 +407,7 @@ export async function setDefaultStyleProfile(
   ctx: RequestContext,
   styleProfileId: string
 ): Promise<StyleProfileDetail> {
-  await requireProfileInOrg(ctx, styleProfileId, "id");
+  await requireManageableProfileInOrg(ctx, styleProfileId);
 
   await clearOrganizationDefault(ctx);
 
@@ -412,7 +438,7 @@ export async function deleteStyleProfile(
   ctx: RequestContext,
   styleProfileId: string
 ): Promise<{ id: string }> {
-  await requireProfileInOrg(ctx, styleProfileId, "id");
+  await requireManageableProfileInOrg(ctx, styleProfileId);
 
   const { error } = await ctx.supabase
     .from("content_style_profiles")
