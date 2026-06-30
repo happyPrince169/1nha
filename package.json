@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "smoke:api": "node scripts/smoke-authenticated-api.mjs"
+    "smoke:api": "node scripts/smoke-authenticated-api.mjs",
+    "smoke:team": "node scripts/smoke-team-permissions.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1069.0",
