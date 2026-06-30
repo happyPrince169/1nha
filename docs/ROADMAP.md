@@ -583,12 +583,43 @@ policy must be audited post-deploy (`pg_policies` query in the migration header)
 **Deferred past 4D:** workspace switcher; per-property ACL tables; audit log;
 real email delivery; owner-transfer flow; member-management JSON API routes.
 
-### Phase 5 — Mobile app skeleton (Expo React Native, later)
+### Phase 5 — Mobile app skeleton (Expo React Native)
+
+#### Phase 5A — Expo skeleton (🟢 DONE)
+
+A thin Expo + React Native + TypeScript companion app at **`apps/mobile`**.
+Independent toolchain — excluded from the web `lint` / `typecheck` / `build`
+(root `tsconfig` exclude + eslint ignore + `.gitignore`).
+
+Architecture (non-negotiable): the mobile app **never** touches the database.
+Supabase is used for **Auth/session only**; **all data flows through the existing
+Next.js `/api/*` routes** with `Authorization: Bearer <access_token>`, reusing the
+service layer + RLS. No service-role key, no backend logic in the app.
 
 ```text
-- Auth
-- Workspace
-- Property list / detail
+Mobile (Expo) → Supabase Auth → access token
+              → fetch(/api/*, Bearer) → Next.js API → service layer → RLS → DB
+```
+
+Delivered:
+- Email/password auth; session stored in the OS secure store via a chunked
+  `expo-secure-store` adapter; foreground token auto-refresh; sign out.
+- Typed API client: attaches Bearer, never logs the token, maps
+  401/403/404/422 → `ApiError`; auth errors trigger sign-out.
+- Navigation (React Navigation native-stack): Sign In → Property List →
+  Property Detail, + Account.
+- Property List: `GET /api/properties` (title/district/price/area/assignee),
+  pull-to-refresh, loading/error/empty states.
+- Property Detail: `GET /api/properties/[id]` core facts + assignment +
+  legal/planning (only when present); read-only image thumbnails from
+  `GET /api/properties/[id]/images`. Internal notes clearly separated.
+
+Deferred to 5B+: any mutation (create/edit/upload), Quick Add, content
+generation, post assistant, workspace/member management in mobile.
+
+#### Phase 5B+ — later
+```text
+- Workspace context surfacing
 - Quick Add (basic)
 ```
 

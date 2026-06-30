@@ -36,6 +36,14 @@ yarn-error.log*
 # vercel
 .vercel
 
+# expo mobile app (apps/mobile) — independent toolchain
+/apps/mobile/node_modules
+/apps/mobile/.expo
+/apps/mobile/dist
+/apps/mobile/web-build
+# keep the documented example env (root rule `.env*` would otherwise ignore it)
+!/apps/mobile/.env.example
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

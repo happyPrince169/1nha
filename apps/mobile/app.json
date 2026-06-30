@@ -1,0 +1,22 @@
+{
+  "expo": {
+    "name": "1nha",
+    "slug": "1nha-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "onenha",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.onenha.mobile"
+    },
+    "android": {
+      "package": "com.onenha.mobile"
+    },
+    "plugins": ["expo-secure-store"],
+    "extra": {
+      "note": "Public runtime config is read from EXPO_PUBLIC_* env vars (see .env.example). No secrets are bundled."
+    }
+  }
+}

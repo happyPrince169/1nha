@@ -1087,8 +1087,8 @@ server-side via `supabase.auth.getUser()` (never a local JWT decode):
   key** is ever used.
 - `/api/*` routes are NOT matched by the proxy (`src/proxy.ts` matcher is
   `/dashboard/:path*` + `/sign-in`); each route self-authenticates through the
-  service context. This prepares the backend for an Expo/mobile client — **no
-  mobile app exists yet.**
+  service context. The Phase 5A Expo app (`apps/mobile`) consumes this Bearer
+  path — see "Mobile app — Expo skeleton" below.
 
 #### Manual API auth tests
 
@@ -1114,6 +1114,45 @@ Supabase JS client and reading `session.access_token` (e.g. in browser devtools
 after login: `JSON.parse(localStorage[Object.keys(localStorage).find(k=>k.endsWith('-auth-token'))]).access_token`),
 or from a `signInWithPassword` response. **Never commit real tokens.**
 The cookie path is exercised by simply using the web app while signed in.
+
+### Mobile app — Expo skeleton (Phase 5A)
+
+A thin Expo + React Native + TypeScript companion app lives at **`apps/mobile`**,
+fully separate from the web toolchain (root `tsconfig` excludes `apps`, eslint
+ignores `apps/**`, `.gitignore` covers `apps/mobile/node_modules` + Expo
+artifacts). It consumes the Bearer API contract above.
+
+**Hard architectural rule:** the mobile app **never** touches the database.
+
+```text
+Mobile (Expo)
+  ├─ Supabase Auth ............ session ONLY (sign in / refresh / sign out)
+  └─ fetch(EXPO_PUBLIC_API_BASE_URL + /api/*, Bearer <access_token>)
+        → Next.js /api → getRequestContext (Bearer path) → service layer → RLS → DB
+```
+
+- **Auth/session:** `@supabase/supabase-js` with a **chunked `expo-secure-store`
+  adapter** (`src/lib/secure-storage.ts`) — tokens live only in the OS
+  Keychain/Keystore, never plain storage, never logged. `autoRefreshToken` is
+  driven by `AppState` (foreground only), the RN-recommended pattern.
+- **Data:** the typed API client (`src/lib/api.ts`) attaches
+  `Authorization: Bearer <token>` from the current session, parses the standard
+  `{ ok, data }` / `{ ok, error }` envelope, and maps 401/403/404/422 to a typed
+  `ApiError`. Auth errors trigger sign-out. **No service-role key; no direct
+  Supabase queries; no backend logic duplicated.** So the web service layer + RLS
+  remain the single permission boundary for both clients.
+- **Config:** three PUBLIC env vars only — `EXPO_PUBLIC_API_BASE_URL`,
+  `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` (anon key is public
+  + RLS-scoped). No secrets bundled.
+- **Screens (read-only):** Sign In (email/password) → Property List
+  (`GET /api/properties`, pull-to-refresh, loading/error/empty) → Property Detail
+  (`GET /api/properties/[id]` core facts + assignment + legal/planning when
+  present; read-only thumbnails from `…/images`; internal notes clearly
+  separated), + Account / Sign Out. React Navigation native-stack, auth-gated by
+  the Supabase session.
+
+Deferred (5B+): any mutation, Quick Add, content generation, post assistant,
+workspace/member management on mobile, push/offline.
 
 ## Property Flow
 
